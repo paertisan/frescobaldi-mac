@@ -5,8 +5,11 @@ A native macOS front end for LilyPond, forked from
 The original PyQt6 app stays in `../frescobaldi/` as the reference
 implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 
-**Status:** early scaffold. The package manifest and ported templates exist.
-The sources below are the plan and haven't been written yet.
+**Status:** first complete draft. `FrescobaldiCore` (lexer, log parser,
+point-and-click links, LilyPond discovery, engraving, python-ly tools,
+outline) builds and passes its tests on Linux with Swift 6.2. The AppKit app
+was written against the macOS 14+ SDK but hasn't been compiled yet; see
+[MAC-CHECKLIST.md](MAC-CHECKLIST.md) for what to check on a Mac.
 
 ## Why Swift instead of the Qt app
 
@@ -32,7 +35,7 @@ The sources below are the plan and haven't been written yet.
 | Engraving | `Process` running `lilypond -dpoint-and-click --pdf -o <dir/base> <abs path>`. `LANG=en_US.UTF-8` keeps messages parseable; PATH is extended with `/opt/homebrew/bin:/usr/local/bin`. Titled documents are saved first; untitled ones are written to a temp dir. Outputs come from log lines ``Converting to `x.pdf'...`` and ``MIDI output to `x.midi'...``. ⌘R preview, ⇧⌘R publish (`-dno-point-and-click`), ⌘. stop. Optional engrave on save |
 | Preview | PDFKit `PDFView` that reloads while keeping page and zoom. Clicking a `textedit://` link jumps the editor (`showFindIndicator`). Moving the editor cursor highlights the matching notes in the PDF via a link index. Floating zoom/page controls use `.glassEffect()` on macOS 26 with a material fallback. Empty state uses `ContentUnavailableView` |
 | Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log |
-| Tools | python-ly CLI (`python3 -I -c "import sys; sys.path.insert(0, R); from ly.cli.main import main; sys.exit(main())" <cmd>`), with stdin as the selection or whole document. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. Edits are undoable. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
+| Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
 | Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders) |
@@ -64,20 +67,38 @@ Requires Xcode 27+ (the macOS 26+ SDK gives the Liquid Glass look). The build
 targets arm64 only; deployment target is macOS 14.
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer scripts/build-app.sh   # → build/Frescobaldi.app
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+scripts/build-app.sh                 # → build/Frescobaldi.app (OPEN=1 to launch it)
+PYTHON_LY_DIR=build/python swift test
 ```
 
-`scripts/build-app.sh` (to do) will:
-- `swift build -c release --arch arm64`
-- assemble `Frescobaldi.app` with an Info.plist declaring:
-  - bundle id `io.github.paertisan.frescobaldi`
-  - imported UTIs `org.lilypond.lilypond-source` (.ly) and
-    `org.lilypond.lilypond-include` (.ily, .lyi), plus a `public.plain-text`
-    alternate type, with `NSDocumentClass` = `LilyPondDocument`
-- copy `../frescobaldi/icons/org.frescobaldi.Frescobaldi.icns`, the templates
-  and python-ly into the bundle
-- ad-hoc codesign the bundle
+`scripts/build-app.sh`:
+- runs `swift build -c release --arch arm64`
+- downloads the python-ly 0.9.10 wheel once into `build/python` (pinned by
+  SHA-256)
+- assembles `Frescobaldi.app` with `Info.plist` (bundle id
+  `io.github.paertisan.frescobaldi`; imported UTIs
+  `org.lilypond.lilypond-source` for .ly and `org.lilypond.lilypond-include`
+  for .ily/.lyi, plus `public.plain-text` as an alternate type, all with
+  `NSDocumentClass` = `LilyPondDocument`)
+- copies `../frescobaldi/icons/org.frescobaldi.Frescobaldi.icns`, the
+  templates, the python-ly driver and python-ly into the bundle
+- ad-hoc signs the bundle
+
+The python-ly tests are skipped unless python-ly is found: they use
+`$PYTHON_LY_DIR` or `build/python`.
+
+On Linux, `swift test` builds and tests `FrescobaldiCore` only; the app
+target is macOS-only in `Package.swift`.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing`, `LineIndex` |
+| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `MIDIPlayer`, `SettingsWindowController`, `Preferences` |
+| `Resources` | Templates and the python-ly driver, copied into the bundle |
+| `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
 
 SPM resource bundles aren't used, because they break app-bundle signing.
 

@@ -1,0 +1,208 @@
+import AppKit
+import FrescobaldiCore
+
+/// The source editor: a TextKit 1 text view sharing the document's text
+/// storage, with line numbers and syntax highlighting.
+final class EditorViewController: NSViewController, NSTextViewDelegate {
+    let document: LilyPondDocument
+    let textView: LilyTextView
+    private let scrollView = NSScrollView()
+    private var ruler: LineNumberRuler!
+    private var highlighter: SyntaxHighlighter!
+    private(set) var lines = LineIndex()
+    private var highlightScheduled = false
+    private var observers: [NSObjectProtocol] = []
+
+    /// Called (debounced) after the text changes.
+    var onTextChange: (() -> Void)?
+    /// Called when the insertion point moves.
+    var onSelectionChange: ((NSRange) -> Void)?
+
+    init(document: LilyPondDocument) {
+        self.document = document
+        // TextKit 1: build the stack by hand around the document's storage.
+        let layoutManager = NSLayoutManager()
+        layoutManager.allowsNonContiguousLayout = true
+        document.textStorage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        textView = LilyTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 800), textContainer: container)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        if let layoutManager = textView.layoutManager {
+            document.textStorage.removeLayoutManager(layoutManager)
+        }
+    }
+
+    override func loadView() {
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.configureForCode()
+        textView.delegate = self
+
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.contentView.postsBoundsChangedNotifications = true
+
+        ruler = LineNumberRuler(textView: textView, scrollView: scrollView)
+        ruler.lineIndex = { [weak self] in self?.lines ?? LineIndex() }
+        scrollView.verticalRulerView = ruler
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = Preferences.showLineNumbers
+
+        highlighter = SyntaxHighlighter(layoutManager: textView.layoutManager!, textStorage: document.textStorage)
+        lines.rebuild(document.textStorage.string as NSString)
+        ruler.updateThickness(lineCount: lines.lineCount)
+
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                                            object: document.textStorage, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.textStorageDidProcessEditing() }
+        })
+        observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
+                                            object: scrollView.contentView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleHighlight() }
+        })
+        observers.append(center.addObserver(forName: NSView.frameDidChangeNotification,
+                                            object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleHighlight() }
+        })
+        observers.append(center.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.preferencesChanged() }
+        })
+        view = scrollView
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        scheduleHighlight()
+    }
+
+    // MARK: Text changes
+
+    private func textStorageDidProcessEditing() {
+        let storage = document.textStorage
+        guard storage.editedMask.contains(.editedCharacters) else { return }
+        let edited = storage.editedRange
+        lines.rebuild(storage.string as NSString)
+        if document.isLoading {
+            highlighter.invalidateAll()
+        } else {
+            highlighter.invalidate(from: edited.location, lines: lines)
+        }
+        ruler.updateThickness(lineCount: lines.lineCount)
+        ruler.needsDisplay = true
+        // Layout isn't valid yet inside processEditing; color afterwards.
+        scheduleHighlight()
+        scheduleTextChangeCallback()
+    }
+
+    private func scheduleHighlight() {
+        guard !highlightScheduled else { return }
+        highlightScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.highlightScheduled = false
+            self.highlightVisible()
+        }
+    }
+
+    private func highlightVisible() {
+        guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
+        let glyphs = layoutManager.glyphRange(forBoundingRect: textView.visibleRect, in: container)
+        var chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        // A little margin so scrolling doesn't show uncolored lines.
+        let margin = 2000
+        let start = max(0, chars.location - margin)
+        let end = min(document.textStorage.length, NSMaxRange(chars) + margin)
+        chars = NSRange(location: start, length: end - start)
+        highlighter.highlight(chars, lines: lines)
+        ruler.needsDisplay = true
+    }
+
+    private var textChangeWork: DispatchWorkItem?
+    private func scheduleTextChangeCallback() {
+        textChangeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.onTextChange?() }
+        textChangeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func preferencesChanged() {
+        textView.applyFont()
+        scrollView.rulersVisible = Preferences.showLineNumbers
+        ruler.updateThickness(lineCount: lines.lineCount)
+        scheduleHighlight()
+    }
+
+    // MARK: NSTextViewDelegate
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        ruler.needsDisplay = true
+        onSelectionChange?(textView.selectedRange())
+    }
+
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        document.undoManager
+    }
+
+    // MARK: API for the window
+
+    /// Selects and shows a range.
+    func select(_ range: NSRange) {
+        textView.reveal(range)
+    }
+
+    /// Jumps to a point-and-click link or issue location in this document.
+    func reveal(_ link: TextEditLink) {
+        guard let range = link.range(in: textView.nsString) else { return }
+        // Select the linked object; for a bare column, select up to the end of the word.
+        var target = range
+        if target.length == 0 {
+            let lineEnd = NSMaxRange(lines.range(ofLine: min(link.line - 1, lines.lineCount - 1)))
+            var end = target.location
+            let text = textView.nsString
+            while end < lineEnd, end < text.length,
+                  let scalar = Unicode.Scalar(text.character(at: end)),
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                end += 1
+            }
+            target.length = end - target.location
+        }
+        select(target)
+    }
+
+    /// Ruler markers for the issues in this document's file.
+    func showIssues(_ messages: [LilyPondMessage], forPath path: String?) {
+        var markers: [Int: LilyPondMessage.Severity] = [:]
+        for message in messages where path == nil || normalized(message.file) == normalized(path!) {
+            if let existing = markers[message.line], existing.isError { continue }
+            markers[message.line] = message.severity
+        }
+        ruler.markers = markers
+    }
+
+    private func normalized(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// The insertion point as LilyPond's line (1-based) and column (scalar).
+    var cursorPosition: (line: Int, column: Int) {
+        TextEditLink.position(of: textView.selectedRange().location, in: textView.nsString)
+    }
+}

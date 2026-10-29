@@ -1,7 +1,7 @@
 import Foundation
 
 /// An entry in the document outline sidebar.
-public struct OutlineItem: Equatable, Hashable, Sendable {
+public struct OutlineItem: Equatable, Hashable, Sendable, Identifiable {
     public enum Kind: String, Sendable {
         case assignment, score, header, book, bookpart, paper, layout, midi, include, version, marker
     }
@@ -16,6 +16,9 @@ public struct OutlineItem: Equatable, Hashable, Sendable {
     public var line: Int
     /// Nesting depth: 0 for top level, 1 for `\header` inside `\score`, ...
     public var level: Int
+
+    /// Position in the text identifies an item well enough between updates.
+    public var id: String { "\(kind.rawValue):\(range.location):\(title)" }
 
     public init(kind: Kind, title: String, range: NSRange, line: Int, level: Int) {
         self.kind = kind

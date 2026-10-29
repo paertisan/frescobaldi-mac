@@ -261,3 +261,24 @@ private final class StreamedText: @unchecked Sendable {
         #expect(TextEditing.dedentForClosing(at: 2, in: "{\n" as NSString) == nil)
     }
 }
+
+@Suite struct LineIndexTests {
+    @Test func lines() {
+        let index = LineIndex("ab\r\ncd\n\nlast" as NSString)
+        #expect(index.starts == [0, 4, 7, 8])
+        #expect(index.lineCount == 4)
+        #expect(index.line(at: 0) == 0 && index.line(at: 3) == 0 && index.line(at: 4) == 1)
+        #expect(index.line(at: 7) == 2 && index.line(at: 12) == 3)
+        #expect(index.range(ofLine: 0) == NSRange(location: 0, length: 4))
+        #expect(index.range(ofLine: 3) == NSRange(location: 8, length: 4))
+        #expect(LineIndex("" as NSString).range(ofLine: 0) == NSRange(location: 0, length: 0))
+        #expect(LineIndex("x\n" as NSString).starts == [0, 2])
+    }
+
+    @Test func largeText() {
+        let text = String(repeating: "c4 d e f\n", count: 5000) as NSString
+        let index = LineIndex(text)
+        #expect(index.lineCount == 5001)
+        #expect(index.line(at: 9 * 2500 + 3) == 2500)
+    }
+}

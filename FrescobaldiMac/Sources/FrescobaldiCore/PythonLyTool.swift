@@ -103,7 +103,8 @@ public struct PythonLyTool: Sendable {
 
         let process = Process()
         process.executableURL = python
-        process.arguments = ["-I", driverScript.path, pythonLyDirectory.path]
+        // -B: never write __pycache__ into the (signed) app bundle.
+        process.arguments = ["-I", "-B", driverScript.path, pythonLyDirectory.path]
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONIOENCODING"] = "utf-8"
         process.environment = environment
