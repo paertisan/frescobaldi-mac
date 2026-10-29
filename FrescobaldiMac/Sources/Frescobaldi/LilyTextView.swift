@@ -23,6 +23,10 @@ final class LilyTextView: NSTextView {
         isAutomaticDataDetectionEnabled = false
         smartInsertDeleteEnabled = false
         inlinePredictionType = .no
+        if #available(macOS 15.0, *) {
+            // No Writing Tools button or rewrites in a code editor.
+            writingToolsBehavior = .none
+        }
         allowsCharacterPickerTouchBarItem = false
         usesFontPanel = false
         drawsBackground = true

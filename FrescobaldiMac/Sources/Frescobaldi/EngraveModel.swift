@@ -93,11 +93,16 @@ private struct IssueBadge: View {
     let error: Bool
 
     var body: some View {
-        Label("\(count)", systemImage: error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(error ? Color.red : Color.yellow)
-            .font(.caption.weight(.semibold))
-            .accessibilityLabel(error ? "\(count) errors" : "\(count) warnings")
+        // Only the icon is colored: yellow text is unreadable in light mode.
+        HStack(spacing: 2) {
+            Image(systemName: error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(error ? Color.red : Color.yellow)
+            Text("\(count)")
+                .monospacedDigit()
+        }
+        .font(.caption.weight(.semibold))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(error ? "\(count) errors" : "\(count) warnings")
     }
 }
 

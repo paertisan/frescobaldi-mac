@@ -28,6 +28,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private lazy var untitledDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("Frescobaldi-\(UUID().uuidString)", isDirectory: true)
     private var issueIndex = -1
+    private var logWasShown = false
     private var cancellables: Set<AnyCancellable> = []
 
     init(document: LilyPondDocument) {
@@ -46,7 +47,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         buildLayout()
         buildToolbar()
         wireUp()
-        // Only one window can own the autosave name; later ones cascade.
+        // Centered unless a saved frame is restored. Only one window can own
+        // the autosave name; later ones cascade.
+        window.center()
         if !window.setFrameAutosaveName("LilyPondDocumentWindow") {
             if let key = NSApp.keyWindow {
                 let topLeft = NSPoint(x: key.frame.minX, y: key.frame.maxY)
@@ -230,6 +233,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             return engraveModel.isRunning
         case #selector(toggleMIDI(_:)):
             item.title = midiPlayer.isPlaying ? "Stop MIDI" : "Play MIDI"
+            item.image = NSImage(systemSymbolName: midiPlayer.isPlaying ? "stop.fill" : "play.fill",
+                                 accessibilityDescription: nil)
             return midiPlayer.isPlaying || !engraveModel.midis.isEmpty
         case #selector(exportPDF(_:)), #selector(revealPDF(_:)):
             return !engraveModel.pdfs.isEmpty
@@ -339,7 +344,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         if !result.cancelled && engraveModel.errorCount > 0 {
             engraveModel.selectedTab = .issues
-            if logItem.isCollapsed { logItem.animator().isCollapsed = false }
+            setLogVisible(true)
         }
     }
 
@@ -432,7 +437,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: Panels
 
     @objc func toggleLog(_ sender: Any?) {
-        logItem.animator().isCollapsed = !logItem.isCollapsed
+        setLogVisible(logItem.isCollapsed)
+    }
+
+    private func setLogVisible(_ visible: Bool) {
+        guard logItem.isCollapsed == visible else { return }
+        guard visible, !logWasShown else {
+            logItem.animator().isCollapsed = !visible
+            return
+        }
+        // The first time, the panel would open at its minimum height, which
+        // shows only one issue. Give it about a third of the editor area.
+        logWasShown = true
+        logItem.isCollapsed = false
+        let split = editorSplit.splitView
+        split.layoutSubtreeIfNeeded()
+        let wanted = min(260, max(logItem.minimumThickness, split.bounds.height * 0.3))
+        if logItem.viewController.view.frame.height < wanted - 1 {
+            split.setPosition(split.bounds.height - wanted - split.dividerThickness, ofDividerAt: 0)
+        }
     }
 
     @objc func togglePreview(_ sender: Any?) {
@@ -477,6 +500,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
         from.widthAnchor.constraint(equalToConstant: 140).isActive = true
+        to.widthAnchor.constraint(equalTo: from.widthAnchor).isActive = true
         grid.frame = NSRect(x: 0, y: 0, width: 220, height: 56)
         alert.accessoryView = grid
         alert.addButton(withTitle: "Transpose")

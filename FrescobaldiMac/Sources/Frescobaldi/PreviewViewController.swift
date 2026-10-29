@@ -314,24 +314,24 @@ struct PreviewControls: View {
     var body: some View {
         if model.hasDocument {
             HStack(spacing: 12) {
-                Button(action: model.previousPage) { Image(systemName: "chevron.up") }
+                Button(action: model.previousPage) { Image(systemName: "chevron.up").accessibilityLabel("Previous Page") }
                     .disabled(model.pageIndex == 0)
                     .help("Previous Page")
                 Text("\(model.pageIndex + 1) of \(model.pageCount)")
                     .monospacedDigit()
                     .frame(minWidth: 52)
-                Button(action: model.nextPage) { Image(systemName: "chevron.down") }
+                Button(action: model.nextPage) { Image(systemName: "chevron.down").accessibilityLabel("Next Page") }
                     .disabled(model.pageIndex + 1 >= model.pageCount)
                     .help("Next Page")
                 Divider().frame(height: 16)
-                Button(action: model.zoomOut) { Image(systemName: "minus.magnifyingglass") }
+                Button(action: model.zoomOut) { Image(systemName: "minus.magnifyingglass").accessibilityLabel("Zoom Out") }
                     .help("Zoom Out")
                 Text("\(Int((model.scale * 100).rounded()))%")
                     .monospacedDigit()
                     .frame(minWidth: 40)
-                Button(action: model.zoomIn) { Image(systemName: "plus.magnifyingglass") }
+                Button(action: model.zoomIn) { Image(systemName: "plus.magnifyingglass").accessibilityLabel("Zoom In") }
                     .help("Zoom In")
-                Button(action: model.fitWidth) { Image(systemName: "arrow.left.and.right") }
+                Button(action: model.fitWidth) { Image(systemName: "arrow.left.and.right").accessibilityLabel("Fit Width") }
                     .disabled(model.fitsWidth)
                     .help("Fit Width")
             }

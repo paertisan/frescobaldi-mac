@@ -25,6 +25,8 @@ final class SettingsWindowController: NSWindowController {
     private static func tab<V: View>(_ label: String, symbol: String, view: V) -> NSTabViewItem {
         let controller = NSHostingController(rootView: view.frame(width: 520).fixedSize())
         controller.sizingOptions = [.preferredContentSize]
+        // The tab view controller shows the selected tab's title in the window.
+        controller.title = label
         let item = NSTabViewItem(viewController: controller)
         item.label = label
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
@@ -157,11 +159,13 @@ struct EditorSettingsView: View {
     var body: some View {
         Form {
             Section("Text") {
-                Stepper(value: $fontSize, in: 8...36, step: 1) {
-                    LabeledContent("Font size", value: "\(Int(fontSize)) pt")
+                LabeledContent("Font size") {
+                    Text("\(Int(fontSize)) pt").monospacedDigit()
+                    Stepper("Font size", value: $fontSize, in: 8...36, step: 1).labelsHidden()
                 }
-                Stepper(value: $indentWidth, in: 1...8) {
-                    LabeledContent("Indent width", value: "\(indentWidth) spaces")
+                LabeledContent("Indent width") {
+                    Text(indentWidth == 1 ? "1 space" : "\(indentWidth) spaces").monospacedDigit()
+                    Stepper("Indent width", value: $indentWidth, in: 1...8).labelsHidden()
                 }
                 Toggle("Show line numbers", isOn: $showLineNumbers)
             }
