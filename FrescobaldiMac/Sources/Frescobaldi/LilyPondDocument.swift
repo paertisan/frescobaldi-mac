@@ -74,10 +74,12 @@ final class LilyPondDocument: NSDocument {
     override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType,
                        completionHandler: @escaping (Error?) -> Void) {
         super.save(to: url, ofType: typeName, for: saveOperation) { [weak self] error in
+            // Read the flag first: the engraver's completion handler clears it.
+            let forEngrave = self?.isSavingForEngrave ?? false
             completionHandler(error)
-            guard error == nil, let self,
+            guard error == nil, let self, !forEngrave,
                   saveOperation == .saveOperation || saveOperation == .saveAsOperation,
-                  Preferences.engraveOnSave, !self.isSavingForEngrave else { return }
+                  Preferences.engraveOnSave else { return }
             for case let controller as DocumentWindowController in self.windowControllers {
                 controller.engrave(mode: .preview, saveFirst: false)
             }

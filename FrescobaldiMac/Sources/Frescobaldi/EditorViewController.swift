@@ -24,10 +24,10 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         let layoutManager = NSLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
         document.textStorage.addLayoutManager(layoutManager)
-        let container = NSTextContainer(containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         layoutManager.addTextContainer(container)
-        textView = LilyTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 800), textContainer: container)
+        textView = LilyTextView(frame: .zero, textContainer: container)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -51,6 +51,8 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         textView.delegate = self
 
         scrollView.documentView = textView
+        // Fill the visible height so clicks below the last line still hit the text view.
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
@@ -194,7 +196,7 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
             if let existing = markers[message.line], existing.isError { continue }
             markers[message.line] = message.severity
         }
-        ruler.markers = markers
+        ruler.issueMarkers = markers
     }
 
     private func normalized(_ path: String) -> String {

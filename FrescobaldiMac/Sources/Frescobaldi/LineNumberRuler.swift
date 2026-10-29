@@ -8,7 +8,7 @@ final class LineNumberRuler: NSRulerView {
     /// Provided by the editor so the ruler doesn't rescan the text.
     var lineIndex: () -> LineIndex = { LineIndex() }
     /// 1-based line → most severe message on it.
-    var markers: [Int: LilyPondMessage.Severity] = [:] {
+    var issueMarkers: [Int: LilyPondMessage.Severity] = [:] {
         didSet { needsDisplay = true }
     }
 
@@ -16,6 +16,8 @@ final class LineNumberRuler: NSRulerView {
         self.textView = textView
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = textView
+        reservedThicknessForMarkers = 0
+        reservedThicknessForAccessoryView = 0
         ruleThickness = 36
     }
 
@@ -61,7 +63,7 @@ final class LineNumberRuler: NSRulerView {
             let height = fragment.height
             let point = NSPoint(x: ruleThickness - size.width - 6, y: y + (height - size.height) / 2)
             label.draw(at: point, withAttributes: line == currentLine ? currentAttributes : attributes)
-            if let severity = markers[line + 1] {
+            if let severity = issueMarkers[line + 1] {
                 let color: NSColor = severity.isError ? .systemRed : .systemYellow
                 color.setFill()
                 let dot = NSRect(x: 4, y: y + height / 2 - 3.5, width: 7, height: 7)

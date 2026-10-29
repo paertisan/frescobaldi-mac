@@ -27,6 +27,9 @@ Likely compile problems, in rough order of likelihood:
       Newer SDKs may mark the completion handler `@Sendable`; if the override
       doesn't match, copy the signature Xcode suggests.
 - [ ] `presentError(_:)` returning an unused `Bool`: only warnings.
+- [ ] Concurrency warnings in `LilyPondDocument.read(from:ofType:)` /
+      `data(ofType:)` if the SDK makes them nonisolated: wrap the bodies in
+      `MainActor.assumeIsolated { … }` (safe, since reading isn't concurrent).
 - [ ] SwiftUI: `List(selection:)` with `.tag(item.id)` in `OutlineSidebar.swift`;
       `glassEffect(.regular, in: Capsule())` in `PreviewViewController.swift`
       (needs the macOS 26 SDK; it's behind `#available`).
@@ -48,7 +51,8 @@ Likely compile problems, in rough order of likelihood:
 - [ ] Untitled document: ⌘R engraves a temporary copy; point-and-click still
       jumps into the untitled editor.
 - [ ] An error in the source: the Issues panel opens, the ruler shows a red
-      dot, clicking an issue selects the spot, and ⌘' / ⇧⌘' step through issues.
+      dot, clicking an issue selects the spot, and ⌘' / ⇧⌘' step through issues. (If ⇧⌘' doesn't fire, change its key
+      equivalent in `MainMenu.swift` to `"\""` with only `.command`.)
 - [ ] ⇧⌘R engraves without point-and-click links; ⌘. stops a long engrave.
 - [ ] Click a note in the PDF: the editor selects the note.
       **Unverified:** that `PDFViewDelegate.pdfViewWillClick(onLink:with:)` is

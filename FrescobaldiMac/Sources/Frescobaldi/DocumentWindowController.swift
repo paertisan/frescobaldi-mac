@@ -18,7 +18,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     let midiPlayer = MIDIPlayer()
 
     private let mainSplit = NSSplitViewController()
-    private let editorSplit = NSSplitViewController()
+    private let editorSplit = NestedSplitViewController()
     private var sidebarItem: NSSplitViewItem!
     private var logItem: NSSplitViewItem!
     private var previewItem: NSSplitViewItem!
@@ -46,8 +46,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         buildLayout()
         buildToolbar()
         wireUp()
-        window.setFrameAutosaveName("LilyPondDocumentWindow")
-        if window.frame.origin == .zero { window.center() }
+        // Only one window can own the autosave name; later ones cascade.
+        if !window.setFrameAutosaveName("LilyPondDocumentWindow") {
+            if let key = NSApp.keyWindow {
+                let topLeft = NSPoint(x: key.frame.minX, y: key.frame.maxY)
+                window.setFrameTopLeftPoint(window.cascadeTopLeft(from: topLeft))
+            } else {
+                window.center()
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -184,7 +191,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         case ToolbarID.preview:
             return button("Preview", "sidebar.right", #selector(togglePreview(_:)), "Show or Hide Preview (⌥⌘↩)")
         case ToolbarID.transpose:
-            return button("Transpose", "arrow.up.arrow.down", #selector(transpose(_:)), "Transpose (⌃⌘T)")
+            return button("Transpose", "arrow.up.arrow.down", #selector(transposePitches(_:)), "Transpose (⌃⌘T)")
         case ToolbarID.status:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Status"
@@ -448,7 +455,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     // MARK: python-ly tools
 
-    @objc func transpose(_ sender: Any?) {
+    @objc func transposePitches(_ sender: Any?) {
         guard let window else { return }
         let defaults = UserDefaults.standard
         let alert = NSAlert()
@@ -528,5 +535,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 : NSRange(location: min(selection.location, (newText as NSString).length), length: 0)
             editor.textView.replace(change.range, with: change.replacement, selection: newSelection, actionName: name)
         }
+    }
+}
+
+/// The editor/log split. It must not answer toggleSidebar: itself, or the
+/// action would stop here instead of reaching the main split's sidebar.
+private final class NestedSplitViewController: NSSplitViewController {
+    override func responds(to selector: Selector!) -> Bool {
+        if selector == #selector(NSSplitViewController.toggleSidebar(_:)) { return false }
+        return super.responds(to: selector)
     }
 }

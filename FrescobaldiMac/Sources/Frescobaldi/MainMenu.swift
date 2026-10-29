@@ -152,7 +152,7 @@ enum MainMenu {
 
     private static func toolsMenu() -> NSMenu {
         let menu = NSMenu(title: "Tools")
-        add(menu, "Transpose…", #selector(DocumentWindowController.transpose(_:)), "t", [.command, .control])
+        add(menu, "Transpose…", #selector(DocumentWindowController.transposePitches(_:)), "t", [.command, .control])
         let translate = NSMenu(title: "Translate Pitch Names")
         for language in LyEdit.languages {
             let item = add(translate, language.capitalized, #selector(DocumentWindowController.translatePitchNames(_:)))
@@ -175,7 +175,7 @@ enum MainMenu {
         add(menu, "Show Log", #selector(DocumentWindowController.toggleLog(_:)), "y", [.command, .shift])
         add(menu, "Show Preview", #selector(DocumentWindowController.togglePreview(_:)), "\r", [.command, .option])
         menu.addItem(.separator())
-        add(menu, "Zoom In", #selector(DocumentWindowController.zoomInPreview(_:)), "+")
+        add(menu, "Zoom In", #selector(DocumentWindowController.zoomInPreview(_:)), "=")
         add(menu, "Zoom Out", #selector(DocumentWindowController.zoomOutPreview(_:)), "-")
         add(menu, "Fit Width", #selector(DocumentWindowController.zoomToFitPreview(_:)), "0")
         menu.addItem(.separator())
