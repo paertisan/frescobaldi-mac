@@ -63,7 +63,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: Layout
 
     private func buildLayout() {
+        // Hosting controllers in split panes must not size the window from
+        // their SwiftUI content, or it shrinks to the panes' ideal heights.
         let sidebar = NSHostingController(rootView: OutlineSidebarView(model: outlineModel))
+        sidebar.sizingOptions = []
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = 160
         sidebarItem.maximumThickness = 360
@@ -75,6 +78,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         editorItem.minimumThickness = 120
         editorItem.holdingPriority = .defaultLow
         let panel = NSHostingController(rootView: EngravePanelView(model: engraveModel))
+        panel.sizingOptions = []
         logItem = NSSplitViewItem(viewController: panel)
         logItem.canCollapse = true
         logItem.minimumThickness = 90
@@ -512,10 +516,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         let text = lilyDocument.text
         let selection = editor.textView.selectedRange()
         let indentWidth = Preferences.indentWidth
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try tool.apply(edit, to: text, selection: selection.length > 0 ? selection : nil,
                                                  indentWidth: indentWidth) }
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
                 self?.applyLyResult(result, original: text, selection: selection, name: name)
             }
         }

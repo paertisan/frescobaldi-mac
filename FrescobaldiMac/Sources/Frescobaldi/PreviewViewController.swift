@@ -52,6 +52,7 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
         container.addSubview(pdfView)
 
         emptyState = NSHostingView(rootView: PreviewEmptyState())
+        emptyState.sizingOptions = []
         emptyState.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(emptyState)
 

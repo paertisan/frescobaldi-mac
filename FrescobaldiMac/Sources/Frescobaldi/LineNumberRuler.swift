@@ -19,6 +19,9 @@ final class LineNumberRuler: NSRulerView {
         reservedThicknessForMarkers = 0
         reservedThicknessForAccessoryView = 0
         ruleThickness = 36
+        // Since macOS 14 views don't clip by default, and the dirty rect can
+        // reach past the ruler: without this the fill covers the text.
+        clipsToBounds = true
     }
 
     @available(*, unavailable)
@@ -38,9 +41,10 @@ final class LineNumberRuler: NSRulerView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let rect = dirtyRect.intersection(bounds)
         (textView?.backgroundColor ?? .textBackgroundColor).setFill()
-        dirtyRect.fill()
-        drawHashMarksAndLabels(in: dirtyRect)
+        rect.fill()
+        drawHashMarksAndLabels(in: rect)
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
