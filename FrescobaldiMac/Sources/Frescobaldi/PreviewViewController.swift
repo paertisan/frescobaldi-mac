@@ -186,7 +186,8 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
             if i == 0 {
                 let inView = pdfView.convert(rect, from: page)
                 firstVisible = pdfView.bounds.contains(inView)
-                if !firstVisible { pdfView.go(to: rect, on: page) }
+                // Scroll with some margin, so the note doesn't end up at the edge.
+                if !firstVisible { pdfView.go(to: rect.insetBy(dx: -40, dy: -40), on: page) }
             }
         }
     }
