@@ -26,7 +26,7 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
         var bounds: CGRect
     }
 
-    let pdfView = PDFView()
+    let pdfView = ScoreView()
     let controls = PreviewControlsModel()
     private var emptyState: NSHostingView<PreviewEmptyState>!
     private var linkIndex = PointAndClickIndex<LinkTarget>()
@@ -48,6 +48,9 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
         pdfView.displaysPageBreaks = true
         pdfView.autoScales = true
         pdfView.delegate = self
+        pdfView.onTextEditLink = { [weak self] url in
+            if let link = TextEditLink(url: url) { self?.onTextEditLink?(link) }
+        }
         pdfView.backgroundColor = .underPageBackgroundColor
         container.addSubview(pdfView)
 
@@ -229,6 +232,65 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
     func printOperation(printInfo: NSPrintInfo) -> NSPrintOperation? {
         guard let document = pdfView.document else { return nil }
         return document.printOperation(for: printInfo, scalingMode: .pageScaleDownToFit, autoRotate: true)
+    }
+}
+
+/// A PDFView that handles clicks on LilyPond's textedit:// links itself.
+/// PDFKit on macOS 27 doesn't call pdfViewWillClick(onLink:with:) for them,
+/// and the cursor highlight boxes would cover them anyway. PDFKit sends mouse
+/// events to its internal subviews, so hitTest claims the points over links.
+final class ScoreView: PDFView {
+    var onTextEditLink: ((URL) -> Void)?
+    private var linkTracking: NSTrackingArea?
+
+    /// The textedit:// link under a point in this view's coordinates.
+    func textEditURL(at point: NSPoint) -> URL? {
+        guard let page = page(for: point, nearest: false) else { return nil }
+        let pagePoint = convert(point, to: page)
+        for annotation in page.annotations.reversed() where annotation.bounds.contains(pagePoint) {
+            if let url = annotation.url ?? (annotation.action as? PDFActionURL)?.url, url.scheme == "textedit" {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private func textEditURL(for event: NSEvent) -> URL? {
+        textEditURL(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        if bounds.contains(local), document != nil, textEditURL(at: local) != nil { return self }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.clickCount == 1, let url = textEditURL(for: event), let window else {
+            return super.mouseDown(with: event)
+        }
+        // Track the click here: PDFKit's gesture handling swallows the mouse-up.
+        while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if next.type == .leftMouseUp {
+                if textEditURL(for: next) == url { onTextEditLink?(url) }
+                return
+            }
+        }
+    }
+
+    // A pointing hand over notes, like a link in a browser.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let linkTracking { removeTrackingArea(linkTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        linkTracking = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        if textEditURL(for: event) != nil { NSCursor.pointingHand.set() }
     }
 }
 
