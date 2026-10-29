@@ -62,7 +62,7 @@ public enum LilyPondLocator {
                                   home: URL = FileManager.default.homeDirectoryForCurrentUser,
                                   fileManager: FileManager = .default) -> [URL] {
         var result: [URL] = []
-        if let setting = userSetting?.trimmingCharacters(in: .whitespaces), !setting.isEmpty {
+        if let setting = userSetting?.trimmingCharacters(in: .whitespacesAndNewlines), !setting.isEmpty {
             let expanded = (setting as NSString).expandingTildeInPath
             var isDir: ObjCBool = false
             if fileManager.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue {

@@ -74,6 +74,9 @@ private func makeExecutable(_ url: URL, contents: Data) throws {
         let fromFile = LilyPondLocator.candidates(userSetting: "/some/where/lilypond", home: home)
         #expect(fromFile.first?.path == "/some/where/lilypond")
         #expect(LilyPondLocator.candidates(userSetting: "  ", home: home).first?.path == "/opt/homebrew/bin/lilypond")
+        // A pasted path may carry a trailing newline.
+        let pasted = LilyPondLocator.candidates(userSetting: custom.path + "\n", home: home)
+        #expect(pasted.first?.path == custom.appendingPathComponent("lilypond").path)
     }
 
     @Test func locatesExecutableInHome() throws {
