@@ -5,3 +5,9 @@ build/
 dist/
 linux/org.frescobaldi.Frescobaldi.desktop
 linux/org.frescobaldi.Frescobaldi.metainfo.xml
+
+# Swift / local dev
+.venv/
+FrescobaldiMac/.build/
+FrescobaldiMac/.swiftpm/
+.DS_Store
