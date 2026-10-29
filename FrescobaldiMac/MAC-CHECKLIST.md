@@ -1,9 +1,9 @@
 # Checking the app on a Mac
 
-The app sources (`Sources/Frescobaldi`) were written on Linux, where AppKit,
-PDFKit and SwiftUI aren't available. They pass a syntax check but have never
-been type-checked or run. `FrescobaldiCore` and its 67 tests do build and
-pass (Swift 6.2.4 on Linux).
+The app sources (`Sources/Frescobaldi`) were written on Linux. They were
+first built and run on a Mac on 2026-10-29: M1 Max, macOS 27, Xcode 27.1
+(Swift 6.4), LilyPond 2.26.0 arm64 from Homebrew. This file records what
+was checked then; re-run it after larger changes.
 
 Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 `/Applications/Xcode.app`, LilyPond at `/opt/homebrew/bin/lilypond`.
@@ -13,78 +13,99 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 ```bash
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-PYTHON_LY_DIR=build/python swift test   # after build-app.sh has fetched python-ly
-OPEN=1 scripts/build-app.sh
+OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
+PYTHON_LY_DIR=build/python swift test   # 67 tests, python-ly ones included
 ```
 
-Likely compile problems, in rough order of likelihood:
+The app compiled on the first try. None of the expected problems below
+came up; the only diagnostic was a warning about a weak capture inside a
+strong one in `DocumentWindowController.runLyEdit`, now fixed.
 
-- [ ] **Concurrency diagnostics.** The package uses Swift 5 language mode, so
-      most actor-isolation problems should only be warnings. If any are errors,
-      the usual fix is `MainActor.assumeIsolated { … }` in notification and
-      `DispatchQueue.main` callbacks.
-- [ ] **`LilyPondDocument.save(to:ofType:for:completionHandler:)` override.**
-      Newer SDKs may mark the completion handler `@Sendable`; if the override
-      doesn't match, copy the signature Xcode suggests.
-- [ ] `presentError(_:)` returning an unused `Bool`: only warnings.
-- [ ] Concurrency warnings in `LilyPondDocument.read(from:ofType:)` /
-      `data(ofType:)` if the SDK makes them nonisolated: wrap the bodies in
-      `MainActor.assumeIsolated { … }` (safe, since reading isn't concurrent).
-- [ ] SwiftUI: `List(selection:)` with `.tag(item.id)` in `OutlineSidebar.swift`;
+- [x] Concurrency diagnostics: none (Swift 5 language mode).
+- [x] `LilyPondDocument.save(to:ofType:for:completionHandler:)` override
+      matches the SDK.
+- [x] `presentError(_:)` unused results: no warnings.
+- [x] `LilyPondDocument.read(from:ofType:)` / `data(ofType:)`: no warnings.
+- [x] SwiftUI `List(selection:)` in `OutlineSidebar.swift` and
       `glassEffect(.regular, in: Capsule())` in `PreviewViewController.swift`
-      (needs the macOS 26 SDK; it's behind `#available`).
+      compile; the preview controls use Liquid Glass on macOS 27.
 
 ## 2. Run through the features
 
-- [ ] Launch: an untitled window opens with sidebar | editor | preview, a
+Checked by hand with a two-staff minuet (with an `\include`), a file with
+errors and a warning, a long score, and the templates. Light mode was
+checked by launching with `--args -NSRequiresAquaSystemAppearance YES`.
+
+- [x] Launch: an untitled window opens with sidebar | editor | preview, a
       unified toolbar, and "Ready to engrave" centered in it.
-- [ ] Open a `.ly` file: syntax colors look right in light and dark mode, line
+      *Was broken:* the window shrank to 172 pt tall (fixed).
+- [x] Open a `.ly` file: syntax colors look right in light and dark mode, line
       numbers line up (also with wrapped lines and an empty last line).
-- [ ] Editing: Return auto-indents after `{` or `<<`; typing `}` on a blank
+      *Was broken:* the editor text was invisible behind the ruler (fixed).
+- [x] Editing: Return auto-indents after `{` or `<<`; typing `}` on a blank
       line outdents; Tab inserts spaces; ⌘/ toggles `%` comments; ⌘] / ⌘[
       shift lines; ⌘L goes to a line; ⌥⌘= / ⌥⌘- change the font size.
       Smart quotes and spell checking are off. Undo works for each of these.
-- [ ] Find bar: ⌘F, ⌥⌘F (replace), ⌘G / ⇧⌘G, ⌘E.
-- [ ] ⌘R engraves: an edited titled document is saved first (the edited dot
+      (⌘/ was checked from the Format menu: the test tool sends ⌘/ with an
+      empty character string, which no app can match.)
+- [x] Find bar: ⌘F, ⌥⌘F (replace), ⌘G / ⇧⌘G, ⌘E.
+- [x] ⌘R engraves: an edited titled document is saved first (the edited dot
       goes away), the status shows progress and then "Engraved in x s", and the
       PDF appears. Engrave again: the page and zoom stay put.
-- [ ] Untitled document: ⌘R engraves a temporary copy; point-and-click still
+- [x] Untitled document: ⌘R engraves a temporary copy; point-and-click still
       jumps into the untitled editor.
-- [ ] An error in the source: the Issues panel opens, the ruler shows a red
-      dot, clicking an issue selects the spot, and ⌘' / ⇧⌘' step through issues. (If ⇧⌘' doesn't fire, change its key
-      equivalent in `MainMenu.swift` to `"\""` with only `.command`.)
-- [ ] ⇧⌘R engraves without point-and-click links; ⌘. stops a long engrave.
-- [ ] Click a note in the PDF: the editor selects the note.
-      **Unverified:** that `PDFViewDelegate.pdfViewWillClick(onLink:with:)` is
-      called for LilyPond's link annotations.
-- [ ] Move the cursor onto a note: the note gets a tinted box in the PDF and
+- [x] An error in the source: the Issues panel opens, the ruler shows a red
+      dot, clicking an issue selects the spot, and ⌘' / ⇧⌘' step through
+      issues. ⇧⌘' works as is.
+      *Was poor:* the panel opened at its 90 pt minimum, showing one issue
+      (now about a third of the editor height).
+- [x] ⇧⌘R engraves without point-and-click links (no `textedit` in the
+      PDF); ⌘. stops a long engrave ("Stopped", no lilypond left running).
+- [x] Click a note in the PDF: the editor selects the note.
+      *Was broken:* PDFKit on macOS 27 never calls
+      `pdfViewWillClick(onLink:with:)` for LilyPond's links. `ScoreView`
+      now handles the click itself.
+- [x] Move the cursor onto a note: the note gets a tinted box in the PDF and
       the preview scrolls to it if needed.
-- [ ] A score with `\midi { }`: Play (⌥⌘P) plays through the built-in GM sound
-      bank; the toolbar button turns into Stop.
-- [ ] Tools > Transpose (⌃⌘T) with and without a selection, Translate Pitch
+- [x] A score with `\midi { }`: Play (⌥⌘P) plays through the built-in GM sound
+      bank; the toolbar button turns into Stop, and back to Play at the end.
+- [x] Tools > Transpose (⌃⌘T) with and without a selection, Translate Pitch
       Names, Relative ↔ Absolute, Simplify Accidentals, Re-indent, Reformat.
-      Each is one Undo step.
-- [ ] File > New from Template: three templates; the cursor lands at `$CURSOR`
+      Each is one Undo step. (Running two tools back to back: the second
+      result is dropped with a beep because the text changed. As designed.)
+- [x] File > New from Template: three templates; the cursor lands at `$CURSOR`
       and `\version` shows the installed LilyPond version.
-- [ ] Settings (⌘,): General shows "LilyPond 2.26.0" with an "Apple silicon"
+- [x] Settings (⌘,): General shows "LilyPond 2.26.0" with an "Apple silicon"
       badge; choosing another path re-detects it. "Engrave when saving" works
       with ⌘S. Editor settings apply right away.
-- [ ] Window tabs (Window > Merge All Windows), Versions (File > Revert To >
-      Browse All Versions), Rename/Move from the title bar, proxy icon.
-- [ ] File > Export PDF, Show PDF in Finder, Print (prints the PDF).
-- [ ] View: toggling the sidebar, issues panel and preview; Zoom In/Out/Fit
+- [x] Window tabs (Window > Merge All Windows), Versions (File > Revert To >
+      Browse All Versions), Rename/Move (File > Rename… shows the title-bar
+      popover).
+- [ ] Clicking the title in the title bar, and the proxy icon on hover:
+      neither appeared in testing. Check by hand with a real mouse.
+- [x] File > Show PDF in Finder, Print (prints the PDF).
+- [ ] File > Export PDF: the save sheet opens with the PDF's name, but the
+      test tool can't confirm save sheets, so the copy itself is untested.
+- [x] View: toggling the sidebar, issues panel and preview; Zoom In/Out/Fit
       Width; the floating page/zoom controls (Liquid Glass on macOS 26).
 
 ## 3. Things to look at closely
 
-- **Line-number ruler with `fullSizeContentView`.** macOS 14 changed view
-  clipping defaults, and rulers have been known to draw over text. If they
-  do, look at `LineNumberRuler.draw(_:)` and the scroll view's
-  `contentView` clipping.
-- **PDF position after reload** uses `currentDestination`; check that it
-  doesn't drift by a line each time.
-- **Point-and-click paths.** LilyPond may print a path that differs from the
-  document URL (`/private/var` vs `/var` for temp files). Paths are compared
-  after `resolvingSymlinksInPath()`, which should cover this.
-- **Large files.** The line index is rebuilt on every keystroke (a linear
-  scan). That should be fine up to a few hundred thousand characters.
+- **Line-number ruler with `fullSizeContentView`.** It did draw over the
+  text: its dirty rect reached past its bounds. The ruler now sets
+  `clipsToBounds` and fills only its bounds.
+- **PDF position after reload** uses `currentDestination`. No drift: after
+  re-engraving at 154%, every link was at the same spot.
+- **Point-and-click paths.** The test scores lived under `/private/tmp`, and
+  both titled and untitled documents matched LilyPond's paths.
+- **Large files.** Not measured yet. The line index is rebuilt on every
+  keystroke (a linear scan).
+
+## 4. Also noticed
+
+- Opening a document doesn't show its existing PDF; the preview stays empty
+  until you engrave.
+- On macOS 27 an untitled document can get a system-suggested name
+  ("Frescobaldi Score — Suggested"). The temporary copy for engraving is
+  named after it, which is harmless.
+- Opening a file doesn't replace the empty Untitled window from launch.

@@ -5,11 +5,13 @@ A native macOS front end for LilyPond, forked from
 The original PyQt6 app stays in `../frescobaldi/` as the reference
 implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 
-**Status:** first complete draft. `FrescobaldiCore` (lexer, log parser,
-point-and-click links, LilyPond discovery, engraving, python-ly tools,
-outline) builds and passes its tests on Linux with Swift 6.2. The AppKit app
-was written against the macOS 14+ SDK but hasn't been compiled yet; see
-[MAC-CHECKLIST.md](MAC-CHECKLIST.md) for what to check on a Mac.
+**Status:** working MVP. The app builds without warnings with Xcode 27.1
+(Swift 6.4) and was tested by hand on macOS 27 with LilyPond 2.26.0:
+editing, engraving, point-and-click both ways, issues, MIDI, the Tools
+menu, templates and Settings all work, in light and dark mode.
+`FrescobaldiCore` passes its 67 tests on macOS and on Linux (Swift 6.2).
+[MAC-CHECKLIST.md](MAC-CHECKLIST.md) lists what was checked and what is
+still open.
 
 ## Why Swift instead of the Qt app
 
@@ -33,7 +35,7 @@ was written against the macOS 14+ SDK but hasn't been compiled yet; see
 | Editor | `NSTextView` on TextKit 1 (`usingTextLayoutManager: false`), SF Mono, line-number `NSRulerView` with error/warning markers, auto-indent, 2-space indent, toggle comment (⌘/), shift left/right (⌘[ ⌘]), go to line (⌘L), find bar |
 | Highlighting | Swift lexer in `FrescobaldiCore` (resumable state, UTF-16 `NSRange` tokens). Colors are applied as `NSLayoutManager` temporary attributes on the visible range only, with lexer-state checkpoints. Colors use system `NSColor`s so dark mode and Increase Contrast work automatically |
 | Engraving | `Process` running `lilypond -dpoint-and-click --pdf -o <dir/base> <abs path>`. `LANG=en_US.UTF-8` keeps messages parseable; PATH is extended with `/opt/homebrew/bin:/usr/local/bin`. Titled documents are saved first; untitled ones are written to a temp dir. Outputs come from log lines ``Converting to `x.pdf'...`` and ``MIDI output to `x.midi'...``. ⌘R preview, ⇧⌘R publish (`-dno-point-and-click`), ⌘. stop. Optional engrave on save |
-| Preview | PDFKit `PDFView` that reloads while keeping page and zoom. Clicking a `textedit://` link jumps the editor (`showFindIndicator`). Moving the editor cursor highlights the matching notes in the PDF via a link index. Floating zoom/page controls use `.glassEffect()` on macOS 26 with a material fallback. Empty state uses `ContentUnavailableView` |
+| Preview | PDFKit `PDFView` that reloads while keeping page and zoom. Clicking a `textedit://` link jumps the editor (`showFindIndicator`); `ScoreView` handles those clicks itself (see below). Moving the editor cursor highlights the matching notes in the PDF via a link index. Floating zoom/page controls use `.glassEffect()` on macOS 26 with a material fallback. Empty state uses `ContentUnavailableView` |
 | Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log |
 | Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
@@ -57,6 +59,15 @@ Window-menu tab commands come from AppKit automatically.
   **1-based**. The two following lines show the source split at the error.
   `fatal error: failed files: …` is a summary and can be skipped.
 - A PDF is still produced when there are errors.
+- PDFKit doesn't call `pdfViewWillClick(onLink:with:)` for these links.
+  Mouse events go to PDFKit's internal subviews, and its gesture handling
+  swallows the mouse-up. `ScoreView` claims points over `textedit://` links
+  in `hitTest` and tracks the click in `mouseDown`.
+- Views don't clip to their bounds (since macOS 14), and a ruler's dirty
+  rect can reach over the text view, so `LineNumberRuler` clips and fills
+  only its bounds.
+- SwiftUI hosting controllers inside split view items need
+  `sizingOptions = []`, or the window shrinks to their ideal sizes.
 - `python3 -m ly "transpose c d"` and `ly "translate english"` read stdin and
   write stdout. Languages: nederlands, catalan, deutsch, english, espanol,
   italiano, norsk, portugues, suomi, svenska, vlaams.
