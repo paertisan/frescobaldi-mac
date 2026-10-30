@@ -174,6 +174,35 @@ in dark and light mode, and the Mahler project (read only).
       open pop-up menus in the background, so its look and choosing in it
       are unchecked (its title follows the choice and the current file).
 
+## 2e. Fixes from the upstream issue review
+
+Bugs Frescobaldi has upstream that this app shared, checked in dark and
+light mode with a score whose `\include "part.ily"` has an error.
+
+- [x] `#(set-default-paper-size "bogus")`: "Unknown paper size: bogus" is
+      in the Issues list ("No location · Show in Log"; a click opens the
+      Log) and counts in the toolbar badge.
+- [x] Engraving the score marks line 3 of `part.ily` in that file's own
+      window. Inserting two lines above moves the marker to line 5, and
+      the score window's issues say `part.ily:5`. After fixing the error,
+      a clean engrave of the score clears the marker.
+- [x] A file whose `\book` has `\bookOutputSuffix "parts"` shows
+      `name-parts.pdf` when opened.
+- [x] Export PDF after ⌘R: the saved PDF has no `textedit:` links (the
+      preview's has 9 and keeps them); the status shows "Engraving for
+      publishing…" and then the previous result again.
+- [x] Tools > Relative to Absolute on music with `\resetRelativeOctave`:
+      an alert says why, and the text is unchanged.
+
+Not checked yet (from the same review):
+
+- [ ] Double-click a `.ly` in Finder while the app isn't running: no extra
+      Untitled window (upstream #1062).
+- [ ] MIDI: a fast run followed by `\tuplet 5/4 { e16 fs gs a b }` leaves
+      no notes sounding (upstream #1595).
+- [ ] Option-drag for a rectangular selection; Toggle Comment and Shift act
+      on each line of it (upstream #1320).
+
 ## 3. Things to look at closely
 
 - **Line-number ruler with `fullSizeContentView`.** It did draw over the
