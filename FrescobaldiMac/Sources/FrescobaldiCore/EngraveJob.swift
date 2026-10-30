@@ -174,10 +174,11 @@ extension EngraveJob {
     /// Output files an earlier run left next to `source`, if they're at least
     /// as new as it. Same rule as Frescobaldi's resultfiles: `name.ext`, then
     /// `name-*[0-9].ext` (several `\book` blocks give `name-1.pdf`,
-    /// `name-2.pdf`, …) in natural order.
-    public static func existingOutputs(for source: URL, fileManager: FileManager = .default)
-        -> (pdfs: [URL], midis: [URL]) {
-        let directory = source.deletingLastPathComponent()
+    /// `name-2.pdf`, …) in natural order. Looks in `outputDirectory` instead
+    /// if the project has one.
+    public static func existingOutputs(for source: URL, outputDirectory: URL? = nil,
+                                       fileManager: FileManager = .default) -> (pdfs: [URL], midis: [URL]) {
+        let directory = outputDirectory ?? source.deletingLastPathComponent()
         let base = source.deletingPathExtension().lastPathComponent
         func modified(_ path: String) -> Date? {
             (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date

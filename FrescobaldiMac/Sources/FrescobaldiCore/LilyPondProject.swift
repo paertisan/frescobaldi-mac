@@ -56,6 +56,11 @@ public struct IncludeNode: Identifiable, Hashable, Sendable {
     public var isAbsolute: Bool
     /// Resolves to a file outside the project folder.
     public var isOutsideProject: Bool
+    /// Found in one of the project's include paths (`-I`).
+    public var isFromIncludePath = false
+    /// At top level or in a `\book`, so the file's scores are part of the
+    /// output (see `TopLevelSummary.Include.isSection`).
+    public var isSection = true
     public var children: [IncludeNode]
 
     /// For SwiftUI's outline lists: nil for leaves.
@@ -85,12 +90,62 @@ public struct ProjectFile: Identifiable, Hashable, Sendable {
     public var childrenOrNil: [ProjectFile]? { isDirectory ? children : nil }
 }
 
-/// A LilyPond project: a main file, everything it includes (recursively),
-/// the files in its folder, and what could be organized better.
+/// Reads and lexes each file once while a project loads.
+final class SourceCache {
+    let read: LilyPondProject.Reader
+    private var texts: [String: String?] = [:]
+    private var summaries: [String: TopLevelSummary] = [:]
+
+    init(read: @escaping LilyPondProject.Reader) { self.read = read }
+
+    func text(_ url: URL) -> String? {
+        let key = LilyPondProject.normalized(url)
+        if let cached = texts[key] { return cached }
+        let text = read(url)
+        texts[key] = .some(text)
+        return text
+    }
+
+    func set(_ text: String, for url: URL) {
+        let key = LilyPondProject.normalized(url)
+        texts[key] = .some(text)
+        summaries[key] = nil
+    }
+
+    func summary(_ url: URL) -> TopLevelSummary? {
+        let key = LilyPondProject.normalized(url)
+        if let cached = summaries[key] { return cached }
+        guard let text = text(url) else { return nil }
+        let summary = DocumentOutline.topLevel(in: text as NSString)
+        summaries[key] = summary
+        return summary
+    }
+}
+
+/// A LilyPond project, seen from one of its files: the project folder, its
+/// settings, the files that make output (targets), what to engrave for that
+/// file, everything the main file includes, and what could be organized
+/// better.
 public struct LilyPondProject: Sendable {
+    /// The file the project was opened for (a window's document).
+    public var file: URL
+    /// The file whose includes are shown: `target`, or `file` itself when
+    /// there's nothing to engrave.
     public var main: URL
-    /// The main file's folder.
+    /// The project folder: where `frescobaldi.json` is; otherwise the main
+    /// file's folder, or the one above it when the main file includes files
+    /// from there (as `parts/flute.ly` includes `../music/flute.ily`).
     public var root: URL
+    /// `frescobaldi.json`, if the project has one.
+    public var settings: ProjectSettings?
+    /// The files to engrave: from `frescobaldi.json`, or every `.ly` file
+    /// that makes output and isn't included inside another file's music.
+    /// Files at the root come first.
+    public var targets: [URL]
+    /// What ⌘R engraves for `file`: itself if it's a target, its `master`,
+    /// or a target that includes it (the default target if several do).
+    /// Nil when it makes no output and nothing includes it.
+    public var target: URL?
     public var tree: IncludeNode
     /// Standardized paths of the main file and every file it includes.
     public var includedPaths: Set<String>
@@ -107,77 +162,301 @@ public struct LilyPondProject: Sendable {
 
     public static let sourceExtensions: Set<String> = ["ly", "ily", "lyi"]
 
+    public var settingsURL: URL { root.appendingPathComponent(ProjectSettings.fileName) }
+    public var includeDirectories: [URL] { settings?.includeDirectories(root: root) ?? [] }
+    public var outputDirectory: URL? { settings?.outputDirectory(root: root) }
+    public var commands: [ProjectCommand] { settings?.commands ?? [] }
+
+    /// LilyPond's `-o` (nil: next to the file) and extra arguments for
+    /// engraving `target`.
+    public func engraveOptions(for target: URL) -> (outputBase: URL?, arguments: [String]) {
+        (settings?.outputBase(for: target, root: root), settings?.lilypondArguments(root: root) ?? [])
+    }
+
+    /// `url` relative to the project folder.
+    public func relativePath(_ url: URL) -> String { Self.relativePath(url, to: root) }
+
     // MARK: Main file
 
     /// The file to engrave for `file`: its `master` variable, otherwise (for
     /// an include file) a `.ly` in its folder or up to two folders above
     /// that includes it, otherwise the file itself.
-    public static func main(for file: URL, text: String, read: Reader = diskReader,
+    public static func main(for file: URL, text: String, read: @escaping Reader = diskReader,
                             fileManager: FileManager = .default) -> URL {
-        if let master = DocumentVariables.master(for: file, text: text),
+        let cache = SourceCache(read: read)
+        cache.set(text, for: file)
+        return main(for: file, cache: cache, includeDirectories: [], fileManager: fileManager)
+    }
+
+    static func main(for file: URL, cache: SourceCache, includeDirectories: [URL],
+                     fileManager: FileManager) -> URL {
+        if let master = DocumentVariables.master(for: file, text: cache.text(file) ?? ""),
            fileManager.fileExists(atPath: master.path) {
             return master
         }
         guard file.pathExtension.lowercased() != "ly" else { return file }
+        return includer(of: file, cache: cache, includeDirectories: includeDirectories, levels: 3,
+                        fileManager: fileManager) ?? file
+    }
+
+    /// A `.ly` in `file`'s folder, or up to `levels - 1` folders above, that
+    /// includes it (directly or not).
+    static func includer(of file: URL, cache: SourceCache, includeDirectories: [URL], levels: Int,
+                         fileManager: FileManager) -> URL? {
         let target = normalized(file)
         var directory = file.deletingLastPathComponent()
-        for _ in 0..<3 {
+        for _ in 0..<levels {
             let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
             for name in names.sorted() where name.lowercased().hasSuffix(".ly") {
                 let candidate = directory.appendingPathComponent(name)
-                guard let text = read(candidate) else { continue }
-                let tree = includeTree(main: candidate, text: text, read: read, fileManager: fileManager,
-                                       limit: 500)
+                guard normalized(candidate) != target, cache.text(candidate) != nil else { continue }
+                let tree = includeTree(main: candidate, cache: cache, includeDirectories: includeDirectories,
+                                       fileManager: fileManager, limit: 500)
                 if paths(in: tree).contains(target) { return candidate }
             }
             let parent = directory.deletingLastPathComponent()
             if parent.path == directory.path { break }
             directory = parent
         }
-        return file
+        return nil
+    }
+
+    /// Without a `frescobaldi.json`: the main file's folder, or the folder
+    /// above when the main file includes files from there, or when an
+    /// include file nothing includes sits next to `.ly` files one level up.
+    /// (A `.ly` that a `.ly` one level up includes counts as an include file.)
+    static func guessRoot(for file: URL, cache: SourceCache, fileManager: FileManager) -> URL {
+        var main = main(for: file, cache: cache, includeDirectories: [], fileManager: fileManager)
+        if normalized(main) == normalized(file), file.pathExtension.lowercased() == "ly" {
+            if let includer = includer(of: file, cache: cache, includeDirectories: [], levels: 2, fileManager: fileManager) {
+                main = includer
+            } else if siblingIncludes(file, cache: cache, fileManager: fileManager) {
+                return file.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL
+            }
+        }
+        let folder = main.deletingLastPathComponent().standardizedFileURL
+        let parent = folder.deletingLastPathComponent()
+        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+        guard parent.path != folder.path, parent.path != home, parent.path != "/" else { return folder }
+        let folderPath = normalized(folder) + "/"
+        let parentPath = normalized(parent) + "/"
+        let tree = includeTree(main: main, cache: cache, root: folder, fileManager: fileManager, limit: 500)
+        func usesParent(_ node: IncludeNode) -> Bool {
+            node.children.contains { child in
+                if child.status == .ok, !child.isAbsolute, let url = child.url {
+                    let path = normalized(url)
+                    if !path.hasPrefix(folderPath) && path.hasPrefix(parentPath) { return true }
+                }
+                return usesParent(child)
+            }
+        }
+        if usesParent(tree) { return parent }
+        if normalized(main) == normalized(file), file.pathExtension.lowercased() != "ly",
+           let names = try? fileManager.contentsOfDirectory(atPath: parent.path),
+           names.contains(where: { $0.lowercased().hasSuffix(".ly") }) {
+            return parent
+        }
+        return folder
+    }
+
+    /// A `.ly` in a folder next to `file`'s includes it, as `parts/flute.ly`
+    /// includes `../music/notes.ly`. Reads at most 100 files.
+    static func siblingIncludes(_ file: URL, cache: SourceCache, fileManager: FileManager) -> Bool {
+        let folder = file.deletingLastPathComponent().standardizedFileURL
+        let parent = folder.deletingLastPathComponent()
+        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+        guard parent.path != folder.path, parent.path != home, parent.path != "/",
+              let siblings = try? fileManager.contentsOfDirectory(atPath: parent.path) else { return false }
+        let target = normalized(file)
+        var budget = 100
+        for sibling in siblings.sorted() where !sibling.hasPrefix(".") && sibling != folder.lastPathComponent {
+            let directory = parent.appendingPathComponent(sibling)
+            guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else { continue }
+            for name in names.sorted() where name.lowercased().hasSuffix(".ly") {
+                budget -= 1
+                if budget < 0 { return false }
+                let candidate = directory.appendingPathComponent(name)
+                guard cache.text(candidate) != nil else { continue }
+                let tree = includeTree(main: candidate, cache: cache, fileManager: fileManager, limit: 200)
+                if paths(in: tree).contains(target) { return true }
+            }
+        }
+        return false
     }
 
     // MARK: Loading
 
-    public static func load(main: URL, mainText: String? = nil, systemDirectories: [URL] = [],
-                            read: Reader = diskReader, fileManager: FileManager = .default) -> LilyPondProject {
-        let root = main.deletingLastPathComponent().standardizedFileURL
-        let text = mainText ?? read(main) ?? ""
-        let tree = includeTree(main: main, text: text, systemDirectories: systemDirectories, root: root,
-                               read: read, fileManager: fileManager)
-        let included = paths(in: tree)
-        let files = scanFolder(root, fileManager: fileManager)
-        var problems = treeProblems(tree, includer: main, root: root)
-        if !text.contains("\\version") {
-            problems.append(ProjectProblem(severity: .hint, message: "\(main.lastPathComponent) has no \\version; convert-ly needs it to update the syntax later.", file: main, line: 1))
-        }
+    /// The project `file` belongs to. `text` is the file's text if it differs
+    /// from the disk (an open document).
+    public static func open(_ file: URL, text: String? = nil, systemDirectories: [URL] = [],
+                            read: @escaping Reader = diskReader, fileManager: FileManager = .default) -> LilyPondProject {
+        let file = file.standardizedFileURL
+        let cache = SourceCache(read: read)
+        if let text { cache.set(text, for: file) }
+        var problems: [ProjectProblem] = []
 
-        // Include files nothing includes: not from this main file, nor from
-        // any other .ly in the folder (such as parts).
-        var reachable = included
-        let mains = sourceFiles(in: files).filter { $0.pathExtension.lowercased() == "ly" && normalized($0) != normalized(main) }
-        for other in mains.prefix(40) {
-            guard let otherText = read(other) else { continue }
-            reachable.formUnion(paths(in: includeTree(main: other, text: otherText, systemDirectories: systemDirectories,
-                                                      root: root, read: read, fileManager: fileManager, limit: 1000)))
+        var settings: ProjectSettings?
+        let root: URL
+        if let found = ProjectSettings.root(containing: file.deletingLastPathComponent(), fileManager: fileManager) {
+            root = found
+            do {
+                settings = try ProjectSettings.load(root: found)
+            } catch {
+                settings = ProjectSettings()
+                problems.append(ProjectProblem(severity: .error, message: "\(ProjectSettings.fileName) couldn't be read: \(describe(error))", file: found.appendingPathComponent(ProjectSettings.fileName), line: nil))
+            }
+        } else {
+            root = guessRoot(for: file, cache: cache, fileManager: fileManager)
         }
-        for file in sourceFiles(in: files) where file.pathExtension.lowercased() != "ly" {
-            if !reachable.contains(normalized(file)) {
-                problems.append(ProjectProblem(severity: .hint, message: "\(relativePath(file, to: root)) isn't included by any .ly file.", file: file, line: nil))
+        let settingsURL = root.appendingPathComponent(ProjectSettings.fileName)
+        let includeDirectories = settings?.includeDirectories(root: root) ?? []
+        for (path, url) in zip(settings?.includePaths ?? [], includeDirectories) {
+            var isDirectory: ObjCBool = false
+            if !fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
+                problems.append(ProjectProblem(severity: .warning, message: "The include path \(path) isn't a folder.", file: settingsURL, line: nil))
             }
         }
+
+        // Every .ly file's includes: what's used, and what's only content.
+        let files = scanFolder(root, fileManager: fileManager)
+        let sources = sourceFiles(in: files)
+        let lyFiles = Array(sources.filter { $0.pathExtension.lowercased() == "ly" }.prefix(300))
+        var trees: [String: IncludeNode] = [:]
+        func tree(of main: URL, limit: Int = 1000) -> IncludeNode {
+            if let known = trees[normalized(main)] { return known }
+            let tree = includeTree(main: main, cache: cache, includeDirectories: includeDirectories,
+                                   systemDirectories: systemDirectories, root: root, fileManager: fileManager,
+                                   limit: limit)
+            trees[normalized(main)] = tree
+            return tree
+        }
+        var reachable: Set<String> = []
+        var nested: Set<String> = []
+        func collectNested(_ node: IncludeNode, parentNested: Bool) {
+            for child in node.children where child.status == .ok {
+                let isNested = parentNested || !child.isSection
+                if isNested, let url = child.url { nested.insert(normalized(url)) }
+                collectNested(child, parentNested: isNested)
+            }
+        }
+        for ly in lyFiles {
+            let lyTree = tree(of: ly)
+            reachable.formUnion(paths(in: lyTree))
+            collectNested(lyTree, parentNested: false)
+        }
+
+        // Makes output by itself or through the files it includes at top level.
+        var outputs: [String: Bool] = [:]
+        func producesOutput(_ source: URL, main: URL, visiting: Set<String> = []) -> Bool {
+            let path = normalized(source)
+            let key = path + "\u{0}" + normalized(main)
+            if let known = outputs[key] { return known }
+            guard let summary = cache.summary(source) else { return false }
+            var result = summary.producesOutput
+            for include in summary.includes where include.isSection && !result {
+                let found = resolve(include.path, from: source, main: main, includeDirectories: includeDirectories,
+                                    systemDirectories: systemDirectories, fileManager: fileManager)
+                guard let url = found.url, !found.isSystem, !visiting.contains(normalized(url)) else { continue }
+                result = producesOutput(url, main: main, visiting: visiting.union([path]))
+            }
+            outputs[key] = result
+            return result
+        }
+
+        var targets: [URL] = []
+        if let listed = settings?.targets {
+            for path in listed {
+                let url = ProjectSettings.url(path, root: root)
+                if fileManager.fileExists(atPath: url.path) {
+                    targets.append(url)
+                } else {
+                    problems.append(ProjectProblem(severity: .error, message: "\(ProjectSettings.fileName) lists the target \(path), which doesn't exist.", file: settingsURL, line: nil))
+                }
+            }
+        } else {
+            targets = lyFiles.filter { !nested.contains(normalized($0)) && producesOutput($0, main: $0) }
+                .sorted { a, b in
+                    let depthA = relativePath(a, to: root).split(separator: "/").count
+                    let depthB = relativePath(b, to: root).split(separator: "/").count
+                    if depthA != depthB { return depthA < depthB }
+                    return relativePath(a, to: root).compare(relativePath(b, to: root),
+                                                             options: [.numeric, .caseInsensitive]) == .orderedAscending
+                }
+        }
+
+        // What ⌘R engraves for the file.
+        let filePath = normalized(file)
+        let fileText = cache.text(file) ?? ""
+        var target: URL?
+        if let own = targets.first(where: { normalized($0) == filePath }) {
+            target = own
+        } else if let master = DocumentVariables.master(for: file, text: fileText),
+                  fileManager.fileExists(atPath: master.path) {
+            target = master
+        } else {
+            let including = targets.filter { paths(in: tree(of: $0)).contains(filePath) }
+            let preferred = settings?.defaultTarget.map { normalized(ProjectSettings.url($0, root: root)) }
+            target = including.first { normalized($0) == preferred } ?? including.first
+            if target == nil {
+                let found = main(for: file, cache: cache, includeDirectories: includeDirectories, fileManager: fileManager)
+                if normalized(found) != filePath {
+                    target = found
+                } else if LilyPondProject.sourceExtensions.contains(file.pathExtension.lowercased()),
+                          producesOutput(file, main: file) {
+                    target = file
+                }
+            }
+        }
+
+        let main = target ?? file
+        trees[normalized(main)] = nil
+        let mainTree = tree(of: main, limit: 3000)
+        problems += treeProblems(mainTree, includer: main, root: root)
+        if !(cache.text(main) ?? "").contains("\\version") {
+            problems.append(ProjectProblem(severity: .hint, message: "\(main.lastPathComponent) has no \\version; convert-ly needs it to update the syntax later.", file: main, line: 1))
+        }
+        if target != nil { reachable.formUnion(paths(in: mainTree)) }
+        // Include files nothing includes: not the main file, nor any other .ly
+        // in the folder (such as parts).
+        for source in sources where source.pathExtension.lowercased() != "ly" {
+            if !reachable.contains(normalized(source)) {
+                problems.append(ProjectProblem(severity: .hint, message: "\(relativePath(source, to: root)) isn't included by any .ly file.", file: source, line: nil))
+            }
+        }
+        if target == nil && (file.pathExtension.lowercased() == "ly" || reachable.contains(filePath)) {
+            problems.append(ProjectProblem(severity: .hint, message: "\(file.lastPathComponent) makes no output by itself (no \\score, music or \\markup at top level) and no target includes it, so there's nothing to engrave.", file: file, line: nil))
+        }
         problems.sort { ($0.severity, $0.file.path, $0.line ?? 0) < ($1.severity, $1.file.path, $1.line ?? 0) }
-        return LilyPondProject(main: main, root: root, tree: tree, includedPaths: included, files: files,
+        return LilyPondProject(file: file, main: main, root: root, settings: settings, targets: targets,
+                               target: target, tree: mainTree, includedPaths: paths(in: mainTree), files: files,
                                problems: problems)
+    }
+
+    /// The project with `main` as the file it was opened for.
+    public static func load(main: URL, mainText: String? = nil, systemDirectories: [URL] = [],
+                            read: @escaping Reader = diskReader, fileManager: FileManager = .default) -> LilyPondProject {
+        open(main, text: mainText, systemDirectories: systemDirectories, read: read, fileManager: fileManager)
+    }
+
+    private static func describe(_ error: Error) -> String {
+        switch error {
+        case let DecodingError.dataCorrupted(context): return context.underlyingError?.localizedDescription ?? context.debugDescription
+        case let DecodingError.typeMismatch(_, context), let DecodingError.valueNotFound(_, context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return path.isEmpty ? context.debugDescription : "\(path): \(context.debugDescription)"
+        default: return error.localizedDescription
+        }
     }
 
     // MARK: Include tree
 
     /// Resolves an `\include` as LilyPond 2.26 does (relative-includes is on):
     /// relative to the including file, then to the main file's folder (the
-    /// working directory), then in LilyPond's own `ly` folder.
-    public static func resolve(_ written: String, from includer: URL, main: URL, systemDirectories: [URL],
-                               fileManager: FileManager = .default) -> (url: URL?, isSystem: Bool) {
+    /// working directory), then the include paths (`-I`), then LilyPond's own
+    /// `ly` folder.
+    public static func resolve(_ written: String, from includer: URL, main: URL, includeDirectories: [URL] = [],
+                               systemDirectories: [URL], fileManager: FileManager = .default)
+        -> (url: URL?, isSystem: Bool, isFromIncludePath: Bool) {
         let expanded = (written as NSString).expandingTildeInPath
         func exists(_ url: URL) -> Bool {
             var isDirectory: ObjCBool = false
@@ -185,40 +464,48 @@ public struct LilyPondProject: Sendable {
         }
         if expanded.hasPrefix("/") {
             let url = URL(fileURLWithPath: expanded).standardizedFileURL
-            return (exists(url) ? url : nil, false)
+            return (exists(url) ? url : nil, false, false)
         }
         for directory in [includer.deletingLastPathComponent(), main.deletingLastPathComponent()] {
             let url = directory.appendingPathComponent(expanded).standardizedFileURL
-            if exists(url) { return (url, false) }
+            if exists(url) { return (url, false, false) }
+        }
+        for directory in includeDirectories {
+            let url = directory.appendingPathComponent(expanded).standardizedFileURL
+            if exists(url) { return (url, false, true) }
         }
         for directory in systemDirectories {
             let url = directory.appendingPathComponent(expanded).standardizedFileURL
-            if exists(url) { return (url, true) }
+            if exists(url) { return (url, true, false) }
         }
-        return (nil, false)
+        return (nil, false, false)
     }
 
-    static func includeTree(main: URL, text: String, systemDirectories: [URL] = [], root: URL? = nil,
-                            read: Reader, fileManager: FileManager, limit: Int = 3000) -> IncludeNode {
+    static func includeTree(main: URL, cache: SourceCache, includeDirectories: [URL] = [],
+                            systemDirectories: [URL] = [], root: URL? = nil, fileManager: FileManager,
+                            limit: Int = 3000) -> IncludeNode {
         let root = root ?? main.deletingLastPathComponent().standardizedFileURL
+        let rootPath = normalized(root) + "/"
         var budget = limit
-        func children(of file: URL, text: String, ancestors: [String], idPrefix: String) -> [IncludeNode] {
-            let includes = DocumentOutline.items(in: text as NSString).filter { $0.kind == .include && $0.title != "\\include" }
-            return includes.enumerated().map { index, item in
+        func children(of file: URL, ancestors: [String], idPrefix: String) -> [IncludeNode] {
+            guard let summary = cache.summary(file) else { return [] }
+            return summary.includes.enumerated().map { index, include in
                 budget -= 1
-                let (url, isSystem) = resolve(item.title, from: file, main: main, systemDirectories: systemDirectories,
-                                              fileManager: fileManager)
-                let expanded = (item.title as NSString).expandingTildeInPath
+                let found = resolve(include.path, from: file, main: main, includeDirectories: includeDirectories,
+                                    systemDirectories: systemDirectories, fileManager: fileManager)
+                let expanded = (include.path as NSString).expandingTildeInPath
                 var node = IncludeNode(
-                    id: "\(idPrefix)/\(index):\(item.title)", written: item.title, url: url, line: item.line,
-                    status: .ok, isAbsolute: expanded.hasPrefix("/"),
-                    isOutsideProject: url.map { !isSystem && !normalized($0).hasPrefix(normalized(root) + "/") } ?? false,
+                    id: "\(idPrefix)/\(index):\(include.path)", written: include.path, url: found.url,
+                    line: include.line, status: .ok, isAbsolute: expanded.hasPrefix("/"),
+                    isOutsideProject: found.url.map { !found.isSystem && !normalized($0).hasPrefix(rootPath) } ?? false,
                     children: [])
-                guard let url else {
+                node.isFromIncludePath = found.isFromIncludePath
+                node.isSection = include.isSection
+                guard let url = found.url else {
                     node.status = .missing
                     return node
                 }
-                if isSystem {
+                if found.isSystem {
                     node.status = .system
                     return node
                 }
@@ -231,16 +518,14 @@ public struct LilyPondProject: Sendable {
                     node.status = .truncated
                     return node
                 }
-                if let childText = read(url) {
-                    node.children = children(of: url, text: childText, ancestors: ancestors + [path], idPrefix: node.id)
-                }
+                node.children = children(of: url, ancestors: ancestors + [path], idPrefix: node.id)
                 return node
             }
         }
         let path = normalized(main)
         return IncludeNode(id: path, written: main.lastPathComponent, url: main, line: 0, status: .ok,
                            isAbsolute: false, isOutsideProject: false,
-                           children: children(of: main, text: text, ancestors: [path], idPrefix: path))
+                           children: children(of: main, ancestors: [path], idPrefix: path))
     }
 
     /// Standardized paths of every found file in the tree.
@@ -271,8 +556,8 @@ public struct LilyPondProject: Sendable {
             }
             if inProject {
                 if child.isAbsolute && child.status != .missing {
-                    problems.append(ProjectProblem(severity: .warning, message: "\(name) is included by an absolute path, so the project only builds on this computer. Copy it into the project, or add its folder to LilyPond's include path (-I).", file: includer, line: child.line))
-                } else if child.isOutsideProject {
+                    problems.append(ProjectProblem(severity: .warning, message: "\(name) is included by an absolute path, so the project only builds on this computer. Copy it into the project, or add its folder to the project's include paths.", file: includer, line: child.line))
+                } else if child.isOutsideProject && !child.isFromIncludePath {
                     problems.append(ProjectProblem(severity: .hint, message: "\(name) is outside the project folder.", file: includer, line: child.line))
                 }
                 if child.status == .ok, !child.isOutsideProject, child.url?.pathExtension.lowercased() == "ly" {

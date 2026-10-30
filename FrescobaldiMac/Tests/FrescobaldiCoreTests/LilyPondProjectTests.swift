@@ -80,7 +80,7 @@ import Testing
         #expect(project.problems.first?.severity == .error)
         #expect(messages.contains { $0.hasPrefix("missing.ily wasn't found") })
         #expect(messages.contains { $0.hasPrefix("loop.ily includes itself") })
-        #expect(messages.contains("font.ily is included by an absolute path, so the project only builds on this computer. Copy it into the project, or add its folder to LilyPond's include path (-I)."))
+        #expect(messages.contains("font.ily is included by an absolute path, so the project only builds on this computer. Copy it into the project, or add its folder to the project's include paths."))
         #expect(messages.contains("notes/unused.ily isn't included by any .ly file."))
         #expect(!messages.contains { $0.contains("notes/flute.ily isn't included") }, "parts count too")
         #expect(project.problems.first { $0.message.hasPrefix("missing.ily") }?.line == 7)
