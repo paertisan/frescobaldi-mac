@@ -247,6 +247,32 @@ private final class StreamedText: @unchecked Sendable {
     }
 }
 
+@Suite struct TextSubstitutionTests {
+    @Test func appliesInOrderOrNotAtAll() throws {
+        let text = "{ c4 d e f | g1 }\n{ a4 b c d }\n"
+        let result = try TextSubstitution.apply([
+            TextSubstitution(old: "g1", new: "g2 g"),
+            TextSubstitution(old: "g2 g", new: "g2 a"),
+        ], to: text)
+        #expect(result == "{ c4 d e f | g2 a }\n{ a4 b c d }\n")
+        #expect(throws: TextSubstitution.Failure.ambiguous(index: 0, count: 2)) {
+            try TextSubstitution.apply([TextSubstitution(old: "c", new: "x")], to: text)
+        }
+        #expect(throws: TextSubstitution.Failure.notFound(index: 1)) {
+            try TextSubstitution.apply([TextSubstitution(old: "g1", new: "g2"), TextSubstitution(old: "g1", new: "")],
+                                       to: text)
+        }
+        #expect(throws: TextSubstitution.Failure.empty(index: 0)) {
+            try TextSubstitution.apply([TextSubstitution(old: "", new: "x")], to: text)
+        }
+        // Overlapping matches count too.
+        #expect(throws: TextSubstitution.Failure.ambiguous(index: 0, count: 2)) {
+            try TextSubstitution.apply([TextSubstitution(old: "aa", new: "b")], to: "aaa")
+        }
+        #expect(try TextSubstitution.apply([TextSubstitution(old: "🎵", new: "♪")], to: "x🎵y") == "x♪y")
+    }
+}
+
 @Suite struct TextEditingTests {
     private func apply(_ edit: TextEditing.Edit, to text: String) -> String {
         (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement)

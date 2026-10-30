@@ -94,3 +94,52 @@ public enum TextEditing {
                     selection: NSRange(location: location - remove, length: 0))
     }
 }
+
+/// A find-and-replace edit that must match exactly once, as used by AI
+/// tools: they name the text to change instead of counting lines and columns.
+public struct TextSubstitution: Equatable, Sendable {
+    public var old: String
+    public var new: String
+
+    public init(old: String, new: String) {
+        self.old = old
+        self.new = new
+    }
+
+    public enum Failure: Error, Equatable, LocalizedError {
+        case empty(index: Int)
+        case notFound(index: Int)
+        case ambiguous(index: Int, count: Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case let .empty(index): "Edit \(index + 1): old_text is empty."
+            case let .notFound(index): "Edit \(index + 1): old_text wasn't found in the document."
+            case let .ambiguous(index, count):
+                "Edit \(index + 1): old_text occurs \(count) times; include more surrounding text so it's unique."
+            }
+        }
+    }
+
+    /// Applies `substitutions` in order, each to the result of the previous
+    /// one. Nothing is applied unless all of them match exactly once.
+    public static func apply(_ substitutions: [TextSubstitution], to text: String) throws -> String {
+        var result = text as NSString
+        for (index, substitution) in substitutions.enumerated() {
+            guard !substitution.old.isEmpty else { throw Failure.empty(index: index) }
+            let first = result.range(of: substitution.old)
+            guard first.location != NSNotFound else { throw Failure.notFound(index: index) }
+            var count = 1
+            var search = NSRange(location: first.location + 1, length: result.length - first.location - 1)
+            while search.length > 0 {
+                let next = result.range(of: substitution.old, options: [], range: search)
+                if next.location == NSNotFound { break }
+                count += 1
+                search = NSRange(location: next.location + 1, length: result.length - next.location - 1)
+            }
+            guard count == 1 else { throw Failure.ambiguous(index: index, count: count) }
+            result = result.replacingCharacters(in: first, with: substitution.new) as NSString
+        }
+        return result as String
+    }
+}
