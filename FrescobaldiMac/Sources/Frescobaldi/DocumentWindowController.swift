@@ -506,6 +506,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             """
         alert.addButton(withTitle: "Run")
         alert.addButton(withTitle: "Cancel")
+        // Return cancels: running a stranger's command takes a deliberate click.
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
             Self.approve(command, root: project.root)
