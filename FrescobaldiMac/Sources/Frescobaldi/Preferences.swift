@@ -12,13 +12,15 @@ enum Preferences {
         static let showLineNumbers = "showLineNumbers"
         static let claudeAccess = "claudeAccess"
         static let editorFontName = "editorFontName"
-        static let editorTheme = "editorTheme"
+        static let lightTheme = "lightTheme"
+        static let darkTheme = "darkTheme"
     }
 
     /// Cascadia Code if it's installed (it has coding ligatures; Cascadia Mono
     /// doesn't), otherwise the system's monospaced font.
     static let defaultFontName = "Cascadia Code"
-    static let defaultTheme = EditorTheme.Name.everforest
+    static let defaultLightTheme = "everforest-light"
+    static let defaultDarkTheme = "everforest"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -29,7 +31,8 @@ enum Preferences {
             Key.showLineNumbers: true,
             Key.claudeAccess: true,
             Key.editorFontName: defaultFontName,
-            Key.editorTheme: defaultTheme.rawValue,
+            Key.lightTheme: defaultLightTheme,
+            Key.darkTheme: defaultDarkTheme,
         ])
     }
 
@@ -40,9 +43,9 @@ enum Preferences {
     /// Let frescobaldi-mcp (Claude) read and edit open documents.
     static var claudeAccess: Bool { UserDefaults.standard.bool(forKey: Key.claudeAccess) }
 
-    static var editorTheme: EditorTheme.Name {
-        EditorTheme.Name(rawValue: UserDefaults.standard.string(forKey: Key.editorTheme) ?? "") ?? defaultTheme
-    }
+    /// Theme ids for light and dark mode (see ThemeStore).
+    static var lightThemeID: String { UserDefaults.standard.string(forKey: Key.lightTheme) ?? defaultLightTheme }
+    static var darkThemeID: String { UserDefaults.standard.string(forKey: Key.darkTheme) ?? defaultDarkTheme }
 
     /// The editor font family ("" = the system's monospaced font).
     static var editorFontName: String { UserDefaults.standard.string(forKey: Key.editorFontName) ?? "" }

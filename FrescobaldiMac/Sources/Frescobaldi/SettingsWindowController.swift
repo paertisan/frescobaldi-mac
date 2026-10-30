@@ -156,7 +156,9 @@ private struct ArchitectureBadge: View {
 struct EditorSettingsView: View {
     @AppStorage(Preferences.Key.editorFontName) private var fontName = Preferences.defaultFontName
     @AppStorage(Preferences.Key.editorFontSize) private var fontSize = 13.0
-    @AppStorage(Preferences.Key.editorTheme) private var theme = Preferences.defaultTheme.rawValue
+    @AppStorage(Preferences.Key.lightTheme) private var lightTheme = Preferences.defaultLightTheme
+    @AppStorage(Preferences.Key.darkTheme) private var darkTheme = Preferences.defaultDarkTheme
+    @State private var choosing: ThemeSlot?
     @AppStorage(Preferences.Key.indentWidth) private var indentWidth = 2
     @AppStorage(Preferences.Key.showLineNumbers) private var showLineNumbers = true
     @State private var families: [String] = []
@@ -171,9 +173,6 @@ struct EditorSettingsView: View {
                     }
                     ForEach(families, id: \.self) { Text($0).tag($0) }
                 }
-                Picker("Theme", selection: $theme) {
-                    ForEach(EditorTheme.Name.allCases) { Text($0.title).tag($0.rawValue) }
-                }
                 LabeledContent("Font size") {
                     Text("\(Int(fontSize)) pt").monospacedDigit()
                     Stepper("Font size", value: $fontSize, in: 8...36, step: 1).labelsHidden()
@@ -184,11 +183,27 @@ struct EditorSettingsView: View {
                 }
                 Toggle("Show line numbers", isOn: $showLineNumbers)
             }
+            Section {
+                ThemeSlotRow(title: "Light mode", themeID: lightTheme) { choosing = .light }
+                ThemeSlotRow(title: "Dark mode", themeID: darkTheme) { choosing = .dark }
+            } header: {
+                Text("Theme")
+            } footer: {
+                Text("Frescobaldi follows the system's light or dark mode. Pick the same theme twice to always use it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .formStyle(.grouped)
+        .sheet(item: $choosing) { slot in
+            ThemeBrowser(slot: slot, selection: slot == .light ? $lightTheme : $darkTheme)
+        }
         .onAppear { families = Preferences.monospacedFontFamilies() }
         .onChange(of: fontName) { notify() }
-        .onChange(of: theme) { notify() }
+        .onChange(of: lightTheme) { notify() }
+        .onChange(of: darkTheme) { notify() }
         .onChange(of: fontSize) { notify() }
         .onChange(of: indentWidth) { notify() }
         .onChange(of: showLineNumbers) { notify() }
@@ -280,5 +295,140 @@ struct ClaudeSettingsView: View {
         } else {
             status = bridge.isRunning ? "Claude can access open documents" : "Off"
         }
+    }
+}
+
+// MARK: - Themes
+
+enum ThemeSlot: String, Identifiable {
+    case light, dark
+    var id: String { rawValue }
+}
+
+/// A theme setting: its name, a preview, and a button to choose another.
+private struct ThemeSlotRow: View {
+    let title: String
+    let themeID: String
+    let choose: () -> Void
+
+    var body: some View {
+        let theme = ThemeStore.shared.theme(id: themeID)
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                if let theme {
+                    ThemeSwatch(theme: theme)
+                }
+                Text(theme?.name ?? themeID)
+                Button("Choose…", action: choose)
+            }
+        }
+    }
+}
+
+/// The theme's background with its main colors as dots.
+private struct ThemeSwatch: View {
+    let theme: EditorTheme
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array([LilyTokenKind.keyword, .command, .string, .duration, .dynamic, .comment].enumerated()),
+                    id: \.offset) { _, kind in
+                Circle()
+                    .fill(Color(nsColor: theme.color(for: kind) ?? theme.foreground))
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: theme.background), in: Capsule())
+        .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+    }
+}
+
+/// Searchable list of all themes with a LilyPond preview of each. Picking
+/// one applies it right away.
+private struct ThemeBrowser: View {
+    let slot: ThemeSlot
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var filter: String
+
+    init(slot: ThemeSlot, selection: Binding<String>) {
+        self.slot = slot
+        _selection = selection
+        _filter = State(initialValue: slot.rawValue)
+    }
+
+    private var themes: [EditorTheme] {
+        ThemeStore.shared.all.filter { theme in
+            let matchesFilter = filter == "all" || theme.id == EditorTheme.systemID
+                || (filter == "dark") == theme.isDark
+            return matchesFilter && (query.isEmpty || theme.name.localizedCaseInsensitiveContains(query)
+                                     || theme.collection.localizedCaseInsensitiveContains(query))
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                TextField("Search", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Show", selection: $filter) {
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                    Text("All").tag("all")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            .padding(12)
+            List(themes, selection: Binding(get: { selection }, set: { id in
+                guard let id else { return }
+                selection = id
+                // Apply right away; the settings view doesn't see the change while the sheet is open.
+                NotificationCenter.default.post(name: Preferences.didChange, object: nil)
+            })) { theme in
+                ThemeRow(theme: theme).tag(theme.id)
+            }
+            .listStyle(.inset)
+            Divider()
+            HStack {
+                Text("\(themes.count) themes. Rainglow themes: MIT, Dayle Rees.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
+        }
+        .frame(width: 500, height: 360)
+    }
+}
+
+private struct ThemeRow: View {
+    let theme: EditorTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(theme.name)
+                    .fontWeight(.medium)
+                Spacer()
+                Text(theme.collection)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(theme.sample())
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: theme.background), in: RoundedRectangle(cornerRadius: 5))
+        }
+        .padding(.vertical, 3)
     }
 }

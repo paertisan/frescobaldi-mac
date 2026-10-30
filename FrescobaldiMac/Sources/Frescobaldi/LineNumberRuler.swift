@@ -42,7 +42,7 @@ final class LineNumberRuler: NSRulerView {
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = dirtyRect.intersection(bounds)
-        (textView?.backgroundColor ?? .textBackgroundColor).setFill()
+        (EditorTheme.current.gutterBackground ?? textView?.backgroundColor ?? .textBackgroundColor).setFill()
         rect.fill()
         drawHashMarksAndLabels(in: rect)
     }

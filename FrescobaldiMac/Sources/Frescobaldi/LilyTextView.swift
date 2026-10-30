@@ -40,7 +40,9 @@ final class LilyTextView: NSTextView {
         font = EditorStyle.font
         backgroundColor = theme.background
         insertionPointColor = theme.insertionPoint
-        selectedTextAttributes = [.backgroundColor: theme.selection]
+        var selected: [NSAttributedString.Key: Any] = [.backgroundColor: theme.selection]
+        if let foreground = theme.selectionForeground { selected[.foregroundColor] = foreground }
+        selectedTextAttributes = selected
         typingAttributes = EditorStyle.baseAttributes
         if let storage = textStorage, storage.length > 0 {
             let all = NSRange(location: 0, length: storage.length)
