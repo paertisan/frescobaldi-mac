@@ -143,7 +143,7 @@ struct EngravePanelView: View {
             case .log: logView
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .themedBackground(fallback: Color(nsColor: .controlBackgroundColor))
     }
 
     @ViewBuilder private var issues: some View {
@@ -163,6 +163,7 @@ struct EngravePanelView: View {
                 .buttonStyle(.plain)
             }
             .listStyle(.inset)
+            .scrollContentBackground(.hidden)
         }
     }
 

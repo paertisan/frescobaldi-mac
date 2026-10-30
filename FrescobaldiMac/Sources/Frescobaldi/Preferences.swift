@@ -18,6 +18,7 @@ enum Preferences {
     /// Cascadia Code if it's installed (it has coding ligatures; Cascadia Mono
     /// doesn't), otherwise the system's monospaced font.
     static let defaultFontName = "Cascadia Code"
+    static let defaultTheme = EditorTheme.Name.everforest
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -28,7 +29,7 @@ enum Preferences {
             Key.showLineNumbers: true,
             Key.claudeAccess: true,
             Key.editorFontName: defaultFontName,
-            Key.editorTheme: EditorTheme.Name.monokai.rawValue,
+            Key.editorTheme: defaultTheme.rawValue,
         ])
     }
 
@@ -40,7 +41,7 @@ enum Preferences {
     static var claudeAccess: Bool { UserDefaults.standard.bool(forKey: Key.claudeAccess) }
 
     static var editorTheme: EditorTheme.Name {
-        EditorTheme.Name(rawValue: UserDefaults.standard.string(forKey: Key.editorTheme) ?? "") ?? .monokai
+        EditorTheme.Name(rawValue: UserDefaults.standard.string(forKey: Key.editorTheme) ?? "") ?? defaultTheme
     }
 
     /// The editor font family ("" = the system's monospaced font).

@@ -156,7 +156,7 @@ private struct ArchitectureBadge: View {
 struct EditorSettingsView: View {
     @AppStorage(Preferences.Key.editorFontName) private var fontName = Preferences.defaultFontName
     @AppStorage(Preferences.Key.editorFontSize) private var fontSize = 13.0
-    @AppStorage(Preferences.Key.editorTheme) private var theme = EditorTheme.Name.monokai.rawValue
+    @AppStorage(Preferences.Key.editorTheme) private var theme = Preferences.defaultTheme.rawValue
     @AppStorage(Preferences.Key.indentWidth) private var indentWidth = 2
     @AppStorage(Preferences.Key.showLineNumbers) private var showLineNumbers = true
     @State private var families: [String] = []

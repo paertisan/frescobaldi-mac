@@ -131,6 +131,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.window?.toolbar?.validateVisibleItems() }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: Preferences.didChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.applyTheme() }
+            .store(in: &cancellables)
+        applyTheme()
+    }
+
+    /// The theme colors the whole window, not only the editor: dark themes
+    /// get a dark appearance and their chrome color behind the toolbar.
+    private func applyTheme() {
+        let theme = EditorTheme.current
+        window?.appearance = theme.appearance
+        window?.titlebarAppearsTransparent = theme.chrome != nil
+        window?.backgroundColor = theme.chrome ?? .windowBackgroundColor
+        preview.applyTheme()
     }
 
     // MARK: NSWindowDelegate

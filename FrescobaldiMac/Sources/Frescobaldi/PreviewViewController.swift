@@ -51,7 +51,6 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
         pdfView.onTextEditLink = { [weak self] url in
             if let link = TextEditLink(url: url) { self?.onTextEditLink?(link) }
         }
-        pdfView.backgroundColor = .underPageBackgroundColor
         container.addSubview(pdfView)
 
         emptyState = NSHostingView(rootView: PreviewEmptyState())
@@ -90,6 +89,12 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
             })
         }
         updateControls()
+        applyTheme()
+    }
+
+    /// The area around the pages takes the theme's chrome color.
+    func applyTheme() {
+        pdfView.backgroundColor = EditorTheme.current.chrome ?? .underPageBackgroundColor
     }
 
     // MARK: Loading
@@ -305,7 +310,7 @@ struct PreviewEmptyState: View {
             Text("Engrave the document (⌘R) to see the score here.")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .themedBackground(fallback: Color(nsColor: .underPageBackgroundColor))
     }
 }
 

@@ -56,8 +56,11 @@ struct OutlineSidebarView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .themedBackground()
         .onChange(of: model.selection) { _, id in
             guard let id, let item = model.items.first(where: { $0.id == id }) else { return }
             model.onSelect?(item)
