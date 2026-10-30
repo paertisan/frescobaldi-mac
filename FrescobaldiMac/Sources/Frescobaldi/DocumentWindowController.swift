@@ -16,6 +16,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     let preview = PreviewViewController()
     let engraveModel = EngraveModel()
     let outlineModel = OutlineModel()
+    let projectModel = ProjectModel()
     let midiPlayer = MIDIPlayer()
 
     private let mainSplit = NSSplitViewController()
@@ -50,7 +51,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         buildLayout()
         buildToolbar()
         wireUp()
-        showExistingOutput()
         // Centered unless a saved frame is restored. Only one window can own
         // the autosave name; later ones cascade.
         window.center()
@@ -72,7 +72,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private func buildLayout() {
         // Hosting controllers in split panes must not size the window from
         // their SwiftUI content, or it shrinks to the panes' ideal heights.
-        let sidebar = NSHostingController(rootView: OutlineSidebarView(model: outlineModel))
+        let sidebar = NSHostingController(rootView: SidebarView(outline: outlineModel, project: projectModel))
         sidebar.sizingOptions = []
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = 160
@@ -114,7 +114,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         editor.onTextChange = { [weak self] in
             guard let self else { return }
             self.outlineModel.update(text: self.lilyDocument.textStorage.string as NSString)
+            self.projectModel.refresh(document: self.lilyDocument)
         }
+        projectModel.onOpen = { [weak self] url, line in self?.openProjectFile(url, line: line) }
+        projectModel.onLoaded = { [weak self] project in
+            guard let self, self.engraveModel.pdfs.isEmpty, self.engraveModel.status == .idle else { return }
+            self.showExistingOutput(for: project.main)
+        }
+        projectModel.refresh(document: lilyDocument)
         editor.onSelectionChange = { [weak self] _ in self?.highlightCursorInPreview() }
         outlineModel.update(text: lilyDocument.textStorage.string as NSString)
         outlineModel.onSelect = { [weak self] item in
@@ -152,6 +159,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         lilyDocument.undoManager
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Other windows or apps may have changed the project's files.
+        projectModel.refresh(document: lilyDocument)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -300,22 +312,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             if let completion { completion(.failure(error)) } else { presentError(error) }
         }
         if let url = lilyDocument.fileURL {
-            if saveFirst && lilyDocument.isDocumentEdited {
-                lilyDocument.isSavingForEngrave = true
-                lilyDocument.save(to: url, ofType: lilyDocument.fileType ?? LilyPondType.source,
-                                  for: .saveOperation) { [weak self] error in
-                    guard let self else { return }
-                    self.lilyDocument.isSavingForEngrave = false
-                    if let error {
-                        fail(error)
-                        return
-                    }
-                    self.run(lilypond: lilypond, source: url, mode: mode, completion: completion)
+            // A file of a larger project engraves the project's main file: its
+            // master variable, or the .ly that includes it.
+            let target = projectModel.mainURL ?? LilyPondProject.main(for: url, text: lilyDocument.text)
+            let isSelf = LilyPondProject.normalized(target) == LilyPondProject.normalized(url)
+            engraveModel.targetName = isSelf ? nil : target.lastPathComponent
+            // LilyPond reads the included files from disk, so save them all.
+            save(saveFirst ? editedProjectDocuments(target: target) : []) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    fail(error)
+                    return
                 }
-            } else {
-                run(lilypond: lilypond, source: url, mode: mode, completion: completion)
+                self.run(lilypond: lilypond, source: target, mode: mode, completion: completion)
             }
         } else {
+            engraveModel.targetName = nil
             // Untitled: engrave a temporary copy.
             do {
                 try FileManager.default.createDirectory(at: untitledDirectory, withIntermediateDirectories: true)
@@ -325,6 +337,39 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 run(lilypond: lilypond, source: source, mode: mode, completion: completion)
             } catch {
                 fail(error)
+            }
+        }
+    }
+
+    /// This document and the other open files of its project that have
+    /// unsaved changes.
+    private func editedProjectDocuments(target: URL) -> [LilyPondDocument] {
+        let project = projectModel.project.flatMap {
+            LilyPondProject.normalized($0.main) == LilyPondProject.normalized(target) ? $0 : nil
+        }
+        let included = project?.includedPaths ?? []
+        let root = LilyPondProject.normalized(target.deletingLastPathComponent()) + "/"
+        return NSDocumentController.shared.documents.compactMap { $0 as? LilyPondDocument }.filter { document in
+            guard document.isDocumentEdited, let url = document.fileURL else { return false }
+            if document === lilyDocument { return true }
+            let path = LilyPondProject.normalized(url)
+            return included.contains(path) || path.hasPrefix(root)
+        }
+    }
+
+    /// Saves `documents` one after the other, then calls `completion`.
+    private func save(_ documents: [LilyPondDocument], completion: @escaping (Error?) -> Void) {
+        guard let document = documents.first, let url = document.fileURL else {
+            completion(nil)
+            return
+        }
+        document.isSavingForEngrave = true
+        document.save(to: url, ofType: document.fileType ?? LilyPondType.source, for: .saveOperation) { [weak self] error in
+            document.isSavingForEngrave = false
+            if let error {
+                completion(error)
+            } else if let self {
+                self.save(Array(documents.dropFirst()), completion: completion)
             }
         }
     }
@@ -369,7 +414,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             engraveModel.status = .finished(succeeded: result.succeeded, errors: engraveModel.errorCount,
                                             warnings: engraveModel.warningCount, duration: result.duration)
         }
-        editor.showIssues(result.messages, forPath: engravedSource?.path)
+        // Markers for this document's own file, also when the main file was engraved.
+        editor.showIssues(result.messages, forPath: lilyDocument.fileURL?.path ?? engravedSource?.path)
+        projectModel.refresh(document: lilyDocument)
 
         let pdfs = result.pdfs.filter { FileManager.default.fileExists(atPath: $0.path) }
         if !pdfs.isEmpty { engraveModel.pdfs = pdfs }
@@ -387,11 +434,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     /// Shows the PDF from an earlier run, and enables Play for its MIDI, if
     /// they're at least as new as the document (as Frescobaldi does).
-    private func showExistingOutput() {
-        guard let url = lilyDocument.fileURL else { return }
-        let outputs = EngraveJob.existingOutputs(for: url)
+    private func showExistingOutput(for main: URL) {
+        let outputs = EngraveJob.existingOutputs(for: main)
         guard !outputs.pdfs.isEmpty || !outputs.midis.isEmpty else { return }
-        engravedSource = url
+        engravedSource = main
         engraveModel.pdfs = outputs.pdfs
         engraveModel.midis = outputs.midis
         if let pdf = outputs.pdfs.first {
@@ -413,6 +459,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     // MARK: Point and click
+
+    /// Opens a file from the project navigator: LilyPond files as a tab of
+    /// this window (at `line` if given), anything else in its own app.
+    func openProjectFile(_ url: URL, line: Int?) {
+        let ext = url.pathExtension.lowercased()
+        guard LilyPondProject.sourceExtensions.contains(ext) || ["scm", "txt"].contains(ext) else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let reveal: (DocumentWindowController) -> Void = { controller in
+            guard let line else { return }
+            controller.editor.reveal(TextEditLink(path: url.path, line: line, startColumn: 0, endColumn: 0))
+        }
+        if let fileURL = lilyDocument.fileURL,
+           LilyPondProject.normalized(fileURL) == LilyPondProject.normalized(url) {
+            reveal(self)
+            return
+        }
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { [weak self] document, _, error in
+            if let error {
+                NSApp.presentError(error)
+                return
+            }
+            guard let controller = (document as? LilyPondDocument)?.windowControllers.first as? DocumentWindowController,
+                  let newWindow = controller.window else { return }
+            if let window = self?.window, newWindow !== window, !(window.tabbedWindows?.contains(newWindow) ?? false) {
+                window.addTabbedWindow(newWindow, ordered: .above)
+            }
+            newWindow.makeKeyAndOrderFront(nil)
+            reveal(controller)
+        }
+    }
 
     /// Opens a source location: in this editor, or another (included) file.
     func open(_ link: TextEditLink) {
@@ -441,7 +519,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private func highlightCursorInPreview() {
         guard preview.hasLinks, let source = engravedSource else { return }
         let position = editor.cursorPosition
-        preview.highlight(path: source.path, line: position.line, column: position.column)
+        // The links point at the files the notes are in: this document's.
+        let path = lilyDocument.fileURL?.path ?? source.path
+        preview.highlight(path: path, line: position.line, column: position.column)
     }
 
     @objc func nextIssue(_ sender: Any?) { stepIssue(by: 1) }

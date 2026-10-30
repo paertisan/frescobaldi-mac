@@ -20,6 +20,8 @@ final class EngraveModel: ObservableObject {
     @Published var pdfs: [URL] = []
     @Published var midis: [URL] = []
     @Published var selectedTab: PanelTab = .issues
+    /// The project's main file when it isn't the document itself.
+    @Published var targetName: String?
 
     /// Set by the window: jump to an issue.
     var onSelectMessage: ((LilyPondMessage) -> Void)?
@@ -56,12 +58,14 @@ struct EngraveStatusView: View {
             case let .running(mode):
                 ProgressView()
                     .controlSize(.small)
-                Text(mode == .publish ? "Engraving for publishing…" : "Engraving…")
+                Text(model.targetName.map { "Engraving \($0)…" }
+                     ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
             case let .finished(succeeded, errors, warnings, duration):
                 Image(systemName: succeeded && errors == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill")
                     .foregroundStyle(succeeded && errors == 0 ? Color.green : Color.red)
-                Text(succeeded && errors == 0 ? "Engraved in \(duration.formatted(.number.precision(.fractionLength(1)))) s"
-                                              : "Engraving failed")
+                Text(succeeded && errors == 0
+                     ? "Engraved\(model.targetName.map { " \($0)" } ?? "") in \(duration.formatted(.number.precision(.fractionLength(1)))) s"
+                     : "Engraving failed")
                 if errors > 0 { IssueBadge(count: errors, error: true) }
                 if warnings > 0 { IssueBadge(count: warnings, error: false) }
             case .cancelled:

@@ -86,6 +86,18 @@ public enum LilyPondLocator {
         }
     }
 
+    /// LilyPond's own include folders (`share/lilypond/<version>/ly`) for an
+    /// executable, newest version first. Works for Homebrew and LilyPond.app.
+    public static func includeDirectories(of executable: URL, fileManager: FileManager = .default) -> [URL] {
+        let prefix = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+        let share = prefix.appendingPathComponent("share/lilypond", isDirectory: true)
+        let versions = (try? fileManager.contentsOfDirectory(atPath: share.path)) ?? []
+        return versions
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            .map { share.appendingPathComponent($0).appendingPathComponent("ly", isDirectory: true) }
+            .filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
     /// Parses the first line of `lilypond --version`:
     /// "GNU LilyPond 2.26.0 (running Guile 3.0)".
     public static func parseVersion(_ output: String) -> LilyPondVersion? {
