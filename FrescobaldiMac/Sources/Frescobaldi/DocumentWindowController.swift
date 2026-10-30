@@ -28,6 +28,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// The file whose PDF the preview shows (the document, its target, or a
     /// temp copy if untitled).
     private var engravedSource: URL?
+    /// The preview's PDF came from a build command, which Export PDF can't
+    /// run again for publishing.
+    private var engravedByCommand = false
+    /// Export PDF's engraving for publishing, while it runs.
+    private var exportJob: EngraveJob?
     private lazy var targetMenu = TargetMenuController(model: projectModel) { [weak self] in
         self?.lilyDocument.displayName ?? ""
     }
@@ -185,6 +190,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     func windowWillClose(_ notification: Notification) {
         run?.cancel()
+        exportJob?.cancel()
         midiPlayer.stop()
         try? FileManager.default.removeItem(at: untitledDirectory)
     }
@@ -323,6 +329,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     @objc func stopEngraving(_ sender: Any?) {
         run?.cancel()
+        exportJob?.cancel()
     }
 
     typealias EngraveCompletion = (Result<EngraveJob.Result, Error>) -> Void
@@ -648,6 +655,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         if let pdf = pdfs.first {
             engravedSource = finishedRun.commandName == nil ? finishedRun.jobs[finishedRun.preferred].source
                 : (projectModel.project?.target ?? lilyDocument.fileURL)
+            engravedByCommand = finishedRun.commandName != nil
             preview.load(pdf)
             if previewItem.isCollapsed { previewItem.animator().isCollapsed = false }
             highlightCursorInPreview()
@@ -720,6 +728,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                                                  otherTargets: project.targets)
         guard !outputs.pdfs.isEmpty || !outputs.midis.isEmpty else { return }
         engravedSource = main
+        engravedByCommand = false
         engraveModel.pdfs = outputs.pdfs
         engraveModel.midis = outputs.midis
         if let pdf = outputs.pdfs.first {
@@ -818,21 +827,118 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     // MARK: PDF
 
+    /// Saves the preview's PDF without point-and-click links, which hold the
+    /// full path of each source file (upstream #1412): LilyPond engraves it
+    /// again for publishing, in a temporary folder so the preview keeps its
+    /// links. (Removing the links with PDFKit only hides them; the file
+    /// still has them.)
     @objc func exportPDF(_ sender: Any?) {
         guard let pdf = engraveModel.pdfs.first, let window else { return }
+        let hasLinks = Self.hasTextEditLinks(pdf)
+        let source = hasLinks && !engravedByCommand ? engravedSource : nil
+        guard !hasLinks || source != nil else {
+            // A build command's PDF: only the command knows how to make it.
+            let alert = NSAlert()
+            alert.messageText = "This PDF has point-and-click links"
+            alert.informativeText = "Each link holds the full path of a source file on this Mac. "
+                + "To export without them, have the build command run LilyPond with -dno-point-and-click."
+            alert.addButton(withTitle: "Export Anyway")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                DispatchQueue.main.async {
+                    self?.chooseExportDestination(for: pdf) { self?.copyPDF(pdf, to: $0) }
+                }
+            }
+            return
+        }
+        chooseExportDestination(for: pdf) { [weak self] destination in
+            if let source {
+                self?.engraveForPublishing(source, pdf: pdf, to: destination)
+            } else {
+                self?.copyPDF(pdf, to: destination)
+            }
+        }
+    }
+
+    private func chooseExportDestination(for pdf: URL, then save: @escaping (URL) -> Void) {
+        guard let window else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = pdf.lastPathComponent
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let destination = panel.url else { return }
-            do {
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
-                }
-                try FileManager.default.copyItem(at: pdf, to: destination)
-            } catch {
-                NSApp.presentError(error)
+            save(destination)
+        }
+    }
+
+    private func copyPDF(_ pdf: URL, to destination: URL) {
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
             }
+            try FileManager.default.copyItem(at: pdf, to: destination)
+        } catch {
+            NSApp.presentError(error)
+        }
+    }
+
+    static func hasTextEditLinks(_ pdf: URL) -> Bool {
+        guard let document = PDFDocument(url: pdf) else { return false }
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            if page.annotations.contains(where: {
+                ($0.url ?? ($0.action as? PDFActionURL)?.url)?.scheme == "textedit"
+            }) { return true }
+        }
+        return false
+    }
+
+    /// Engraves `source` for publishing and saves its PDF named like `pdf`.
+    private func engraveForPublishing(_ source: URL, pdf: URL, to destination: URL) {
+        guard let lilypond = requireLilyPond(nil) else { return }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Frescobaldi-export-\(UUID().uuidString)", isDirectory: true)
+        let job = EngraveJob(lilypond: lilypond, source: source,
+                             outputBase: folder.appendingPathComponent(source.deletingPathExtension().lastPathComponent),
+                             mode: .publish,
+                             extraArguments: projectModel.project?.engraveOptions(for: source).arguments ?? [])
+        let previous = (engraveModel.status, engraveModel.targetName, engraveModel.progress, engraveModel.commandName)
+        engraveModel.status = .running(.publish)
+        engraveModel.targetName = nil
+        engraveModel.progress = nil
+        engraveModel.commandName = nil
+        exportJob = job
+        func finished(_ result: EngraveJob.Result) {
+            defer { try? FileManager.default.removeItem(at: folder) }
+            guard exportJob === job else { return }
+            exportJob = nil
+            // Unless an engrave started meanwhile, show what was there before.
+            if run == nil, case .running(.publish) = engraveModel.status {
+                (engraveModel.status, engraveModel.targetName, engraveModel.progress, engraveModel.commandName) = previous
+            }
+            guard !result.cancelled else { return }
+            let built = result.pdfs.first { $0.lastPathComponent == pdf.lastPathComponent }
+                ?? (result.pdfs.count == 1 ? result.pdfs[0] : nil)
+            guard result.succeeded, let built, FileManager.default.fileExists(atPath: built.path) else {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't engrave \(source.lastPathComponent) for publishing"
+                let error = result.messages.first { $0.severity.isError }?.message
+                    ?? result.log.split(separator: "\n").last.map(String.init) ?? "LilyPond failed."
+                alert.informativeText = error + "\n\nEngrave it with ⌘R to see the issues."
+                if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+                return
+            }
+            copyPDF(built, to: destination)
+        }
+        do {
+            try job.start(output: { _ in }, completion: { result in
+                DispatchQueue.main.async { finished(result) }
+            })
+        } catch {
+            finished(EngraveJob.Result(exitStatus: -1, cancelled: false,
+                                       log: "Couldn't start LilyPond: \(error.localizedDescription)",
+                                       messages: [], pdfs: [], midis: [], duration: 0))
         }
     }
 
