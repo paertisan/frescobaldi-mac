@@ -48,6 +48,21 @@ final class LilyTextView: NSTextView {
 
     /// One undoable replacement, selecting `selection` afterwards.
     func replace(_ range: NSRange, with replacement: String, selection: NSRange? = nil, actionName: String? = nil) {
+        // Close the undo group right away instead of at the end of the event,
+        // so the document counts the change at once: an engrave requested
+        // right after (by Claude, say) must see it and save first.
+        let undo = undoManager
+        let ownGroup = undo.map { $0.groupsByEvent && $0.groupingLevel == 0 } ?? false
+        if ownGroup {
+            undo?.groupsByEvent = false
+            undo?.beginUndoGrouping()
+        }
+        defer {
+            if ownGroup {
+                undo?.endUndoGrouping()
+                undo?.groupsByEvent = true
+            }
+        }
         guard shouldChangeText(in: range, replacementString: replacement) else { return }
         textStorage?.replaceCharacters(in: range, with: NSAttributedString(string: replacement,
                                                                            attributes: EditorStyle.baseAttributes))
