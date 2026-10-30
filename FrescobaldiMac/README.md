@@ -9,7 +9,7 @@ implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 (Swift 6.4) and was tested by hand on macOS 27 with LilyPond 2.26.0:
 editing, engraving, point-and-click both ways, issues, MIDI, the Tools
 menu, templates and Settings all work, in light and dark mode.
-`FrescobaldiCore` passes its 69 tests on macOS and on Linux (Swift 6.2), and
+`FrescobaldiCore` passes its 76 tests on macOS and on Linux (Swift 6.2), and
 the MCP server its 12 on macOS. Claude can work with scores through the
 bundled MCP server (see below).
 [MAC-CHECKLIST.md](MAC-CHECKLIST.md) lists what was checked and what is
@@ -34,15 +34,16 @@ still open.
 | App lifecycle | AppKit (`main.swift` + `AppDelegate`), programmatic main menu, NSDocument architecture |
 | Document | `@objc(LilyPondDocument) NSDocument` owning an `NSTextStorage`; `autosavesInPlace = true` (Versions, Revert To, rename/move in the title bar, proxy icon, edited dot, window tabs) |
 | Window | `NSSplitViewController`: sidebar (outline) · editor + collapsible log (nested vertical split) · PDF preview. `fullSizeContentView`, unified `NSToolbar` with SF Symbols, centered engrave-status item (SwiftUI in `NSHostingView`) |
-| Editor | `NSTextView` on TextKit 1 (`usingTextLayoutManager: false`), SF Mono, line-number `NSRulerView` with error/warning markers, auto-indent, 2-space indent, toggle comment (⌘/), shift left/right (⌘[ ⌘]), go to line (⌘L), find bar |
-| Highlighting | Swift lexer in `FrescobaldiCore` (resumable state, UTF-16 `NSRange` tokens). Colors are applied as `NSLayoutManager` temporary attributes on the visible range only, with lexer-state checkpoints. Colors use system `NSColor`s so dark mode and Increase Contrast work automatically |
+| Editor | `NSTextView` on TextKit 1 (`usingTextLayoutManager: false`), Cascadia Code (or any monospaced font), current-line highlight, line-number `NSRulerView` with error/warning markers, auto-indent, 2-space indent, toggle comment (⌘/), shift left/right (⌘[ ⌘]), go to line (⌘L), find bar |
+| Highlighting | Swift lexer in `FrescobaldiCore` (resumable state, UTF-16 `NSRange` tokens). Colors are applied as `NSLayoutManager` temporary attributes on the visible range only, with lexer-state checkpoints. Colors come from the theme (see [Themes](#themes)) |
 | Engraving | `Process` running `lilypond -dpoint-and-click --pdf -o <dir/base> <abs path>`. `LANG=en_US.UTF-8` keeps messages parseable; PATH is extended with `/opt/homebrew/bin:/usr/local/bin`. Titled documents are saved first; untitled ones are written to a temp dir. Outputs come from log lines ``Converting to `x.pdf'...`` and ``MIDI output to `x.midi'...``. ⌘R preview, ⇧⌘R publish (`-dno-point-and-click`), ⌘. stop. Optional engrave on save |
 | Preview | PDFKit `PDFView` that reloads while keeping page and zoom. Opening a document shows the PDF from an earlier run if it's at least as new as the source (`EngraveJob.existingOutputs`: `name.pdf`, then `name-*[0-9].pdf`, as Frescobaldi's `resultfiles` does). Clicking a `textedit://` link jumps the editor (`showFindIndicator`); `ScoreView` handles those clicks itself (see below). Moving the editor cursor highlights the matching notes in the PDF via a link index. Floating zoom/page controls use `.glassEffect()` on macOS 26 with a material fallback. Empty state uses `ContentUnavailableView` |
 | Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log |
 | Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
-| Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders) |
+| Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders), and New Project (see [Projects](#projects)) |
+| Sidebar | Outline, or the project: include tree, folder and suggestions (see [Projects](#projects)) |
 | Claude (MCP) | `frescobaldi-mcp` helper: file tools, plus a Unix-socket bridge to open documents. See [below](#claude-and-other-ai-clients-mcp) |
 
 LilyPond search order: user setting, `/opt/homebrew/bin`, `/usr/local/bin`,
@@ -90,6 +91,56 @@ the package still has no dependencies.
 Environment variables for the helper: `FRESCOBALDI_LILYPOND` (LilyPond to
 use instead of the app's setting), `FRESCOBALDI_RESOURCES` (templates and
 python-ly driver), `PYTHON_LY_DIR`, `FRESCOBALDI_BRIDGE_SOCKET`.
+
+## Projects
+
+Larger scores are usually split into files: the music in one include file
+per instrument, shared settings in a style sheet, and small `.ly` files
+that put the score and the parts together. The app helps with that:
+
+- **Main file.** A file's project main file is its `-*- master: ...;`
+  document variable (Frescobaldi's convention, in the first or last five
+  lines), or for an include file the `.ly` nearby that includes it. ⌘R in
+  any file of the project engraves the main file (named in the status)
+  after saving the project's edited documents; issue markers and cursor
+  highlighting stay on the file being edited.
+- **Project sidebar.** Switch the sidebar from Outline to Project for the
+  include tree from the main file (resolved as LilyPond 2.26 does:
+  relative to the including file, then the main file's folder, then
+  LilyPond's own `ly` folder), the project folder, and suggestions:
+  missing includes and cycles, absolute paths (the project won't build on
+  another computer), files outside the project, `.ly` files used as
+  includes, `.ily` files nothing includes, a main file without
+  `\version`. Libraries the project uses don't get organization hints.
+  Clicking a file opens it as a tab, at the line in question.
+- **New Project** (⌥⌘N) creates that layout for piano, voice and piano,
+  SATB choir, string quartet or chamber orchestra: `<name>.ly`,
+  `style.ily`, `music/global.ily`, `music/<part>.ily` and `parts/<part>.ly`.
+  Every `.ily` names the score as its master; transposing instruments are
+  written at written pitch with `\transposition`.
+
+## Themes
+
+Settings > Editor sets the font (default Cascadia Code if installed;
+Cascadia Mono has no coding ligatures) and a theme for light mode and one
+for dark mode; the app follows the system appearance. A theme colors the
+whole window: editor, syntax, gutter, current line, toolbar, sidebar,
+issues panel and the area around the PDF, and gives the window the
+matching light or dark appearance.
+
+Built in, from each project's official palette: Everforest Dark and Light
+(the defaults), Nord, Catppuccin Frappé and Latte, Monokai, and System
+(the system colors). Plus the 326 themes of the
+[Rainglow](https://github.com/rainglow/jetbrains) collection (MIT, Dayle
+Rees), converted from JetBrains color schemes by
+`scripts/import-jetbrains-themes.py` into `Resources/Themes/rainglow.json`:
+
+```bash
+python3 -I scripts/import-jetbrains-themes.py <folder of .icls/.xml> Resources/Themes/rainglow.json --id-prefix rainglow
+```
+
+The theme browser searches them all and previews each on a line of
+LilyPond.
 
 ## Verified facts (LilyPond 2.26.0, macOS 27)
 
@@ -147,12 +198,13 @@ target is macOS-only in `Package.swift`.
 
 | Path | What |
 |---|---|
-| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing`, `LineIndex` |
-| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `MIDIPlayer`, `SettingsWindowController`, `Preferences` |
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `ProjectTemplate` |
+| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge` |
 | `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport` |
 | `Sources/frescobaldi-mcp` | The helper's `main.swift` |
-| `Resources` | Templates and the python-ly driver, copied into the bundle |
+| `Resources` | Templates, themes (`Themes/rainglow.json` + license) and the python-ly driver, copied into the bundle |
 | `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
+| `scripts/import-jetbrains-themes.py` | Converts JetBrains color schemes into a theme collection |
 
 SPM resource bundles aren't used, because they break app-bundle signing.
 

@@ -14,7 +14,7 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
-PYTHON_LY_DIR=build/python swift test   # 69 core + 12 MCP tests, python-ly ones included
+PYTHON_LY_DIR=build/python swift test   # 76 core + 12 MCP tests, python-ly ones included
 ```
 
 The app compiled on the first try. None of the expected problems below
@@ -112,6 +112,37 @@ small MCP client (initialize, tools/list, tools/call), with the app running.
       helper then says access is off. Copy buttons show the helper's path.
 - [ ] A real Claude Code or Claude Desktop session using the server (no
       macOS `claude` CLI on the test machine).
+
+## 2c. Themes and projects
+
+Checked with the Mahler 9 example project (22 include files, a style
+sheet with absolute includes of a music font) and generated projects.
+
+- [x] Font: Cascadia Code by default (resolves to CascadiaCode-Regular);
+      the font menu lists the installed monospaced families.
+- [x] Themes in both appearances, by launching with
+      `--args -NSRequiresAquaSystemAppearance YES` for light mode:
+      Everforest Light/Dark (defaults), a Rainglow light/dark pair, a dark
+      theme in light mode and a light theme in dark mode (the window takes
+      the theme's appearance), and System in both modes.
+- [x] The whole window follows the theme: toolbar area, sidebar, issues
+      panel, around the PDF. The editor stays below the toolbar (was broken
+      with the transparent titlebar after leaving full screen).
+- [x] Theme browser: search, Light/Dark/All filter, previews; picking a
+      theme applies it at once.
+- [ ] Switching the system between light and dark mode while the app runs
+      (handled via `NSApp.effectiveAppearance`; not switched in testing).
+- [x] Project sidebar on the Mahler project: main file from the master
+      variable, include tree, folder, suggestions for the two absolute
+      includes only; clicking a suggestion opens the file as a tab at the
+      line.
+- [x] ⌘R in `notes/floeten.ily` engraves `mahler9-I-p1-2.ly` ("Engraved
+      mahler9-I-p1-2.ly in 8.6 s"); the existing PDF shows on open.
+- [x] New Project templates: all five ensembles engrave without errors or
+      warnings (tests), and a generated chamber-orchestra project engraves
+      from `music/clarinet.ily` with transposed key signatures.
+- [ ] The New Project panel itself up to Create (the automation tool
+      can't drive save panels); the panel opens with the ensemble menu.
 
 ## 3. Things to look at closely
 
