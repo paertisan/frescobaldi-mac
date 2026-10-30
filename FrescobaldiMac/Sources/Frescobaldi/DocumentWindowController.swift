@@ -143,7 +143,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             self?.editor.textView.showFindIndicator(for: item.range)
         }
         preview.onTextEditLink = { [weak self] link in self?.open(link) }
-        engraveModel.onSelectMessage = { [weak self] message in self?.open(message.link) }
+        engraveModel.onSelectMessage = { [weak self] message in
+            // A message without a location is only in the log.
+            if message.isLocated { self?.open(message.link) } else { self?.engraveModel.selectedTab = .log }
+        }
         engraveModel.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.window?.toolbar?.validateVisibleItems() }
@@ -680,7 +683,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         result.pdfs = located(result.pdfs)
         result.midis = located(result.midis)
         result.messages = result.messages.map { message in
-            guard !FileManager.default.fileExists(atPath: message.file) else { return message }
+            guard message.isLocated, !FileManager.default.fileExists(atPath: message.file) else { return message }
             let name = "/" + URL(fileURLWithPath: message.file).lastPathComponent
             let matches = sources.filter { $0.path.hasSuffix(name) }
             var message = message
@@ -805,7 +808,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     @objc func previousIssue(_ sender: Any?) { stepIssue(by: -1) }
 
     private func stepIssue(by delta: Int) {
-        let messages = engraveModel.messages
+        let messages = engraveModel.messages.filter(\.isLocated)
         guard !messages.isEmpty else { NSSound.beep(); return }
         issueIndex = (issueIndex + delta + messages.count) % messages.count
         open(messages[issueIndex].link)

@@ -217,7 +217,7 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
     /// Ruler markers for the issues in this document's file.
     func showIssues(_ messages: [LilyPondMessage], forPath path: String?) {
         var markers: [Int: LilyPondMessage.Severity] = [:]
-        for message in messages where path == nil || normalized(message.file) == normalized(path!) {
+        for message in messages where message.isLocated && (path == nil || normalized(message.file) == normalized(path!)) {
             if let existing = markers[message.line], existing.isError { continue }
             markers[message.line] = message.severity
         }

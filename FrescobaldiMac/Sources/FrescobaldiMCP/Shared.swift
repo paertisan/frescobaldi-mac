@@ -26,11 +26,14 @@ public enum EngraveReport {
     public static func issue(_ message: LilyPondMessage) -> JSONValue {
         var object: [String: JSONValue] = [
             "severity": .string(message.severity.rawValue),
-            "file": .string(message.file),
-            "line": .int(message.line),
-            "column": .int(message.column),
             "message": .string(message.message),
         ]
+        // A message without a location (an unknown paper size) has no file.
+        if message.isLocated {
+            object["file"] = .string(message.file)
+            object["line"] = .int(message.line)
+            object["column"] = .int(message.column)
+        }
         if !message.context.isEmpty { object["context"] = .string(message.context.joined(separator: "\n")) }
         return .object(object)
     }

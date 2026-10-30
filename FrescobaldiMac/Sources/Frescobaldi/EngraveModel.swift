@@ -213,14 +213,17 @@ private struct IssueRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(message.message)
                     .lineLimit(2)
-                Text("\(URL(fileURLWithPath: message.file).lastPathComponent):\(message.line):\(message.column)")
+                Text(message.isLocated
+                     ? "\(URL(fileURLWithPath: message.file).lastPathComponent):\(message.line)"
+                       + (message.column > 0 ? ":\(message.column)" : "")
+                     : "No location · Show in Log")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let source = message.context.first, !source.trimmingCharacters(in: .whitespaces).isEmpty {
+                if message.context.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
                     Text(message.context.joined(separator: "\n"))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(6)
                 }
             }
             Spacer(minLength: 0)

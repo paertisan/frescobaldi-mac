@@ -14,8 +14,9 @@ public enum FrescobaldiTools {
         to use the frontmost one. Prefer these over editing the file on disk while \
         it is open.
         - Files on disk, or source text: engrave, transform, outline, render_page.
-        - Workflow: engrave, read the issues (1-based line and column in the source), \
-        fix them, engrave again, then render_page to look at the result.
+        - Workflow: engrave, read the issues (1-based line and column in the source; \
+        none for a message such as an unknown paper size), fix them, engrave again, \
+        then render_page to look at the result.
         - Pitches for transpose are Dutch names with octave marks (c, cis, bes, d'), \
         whatever language the document uses.
         """

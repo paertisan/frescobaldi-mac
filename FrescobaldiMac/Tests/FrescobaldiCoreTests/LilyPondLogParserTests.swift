@@ -62,8 +62,94 @@ fatal error: failed files: "/Users/rwr/Music/test.ly"
 
     @Test func ignoresOtherLines() {
         #expect(LilyPondLogParser.parseMessage("Parsing...") == nil)
-        #expect(LilyPondLogParser.parseMessage("warning: no \\version statement found") == nil)
-        #expect(LilyPondLogParser.parseMessage("/a.ly:x:1: error: y") == nil)
+        #expect(LilyPondLogParser.parseMessage("/a.ly:x: error: y") == nil)
+        #expect(LilyPondLogParser.parseMessage("In procedure car: wrong type") == nil)
+    }
+
+    // The logs below are LilyPond 2.26.0's.
+
+    @Test func keepsMessagesWithoutALocation() throws {
+        let log = """
+        Processing `w1.ly'
+        Parsing...
+        warning: Unknown paper size: bogus
+        Interpreting music...
+        Converting to `w1.pdf'...
+        Success: compilation successfully completed
+        """
+        let messages = LilyPondLogParser.parse(log)
+        let warning = try #require(messages.first)
+        #expect(messages.count == 1)
+        #expect(warning.severity == .warning && warning.message == "Unknown paper size: bogus")
+        #expect(!warning.isLocated && warning.file.isEmpty && warning.line == 0)
+        #expect(warning.context.isEmpty)
+        // Not tied to the folder a build command ran in.
+        let resolved = LilyPondLogParser.resolvingPaths(messages, in: log, base: URL(fileURLWithPath: "/tmp"))
+        #expect(resolved.first?.file == "")
+
+        let fatal = LilyPondLogParser.parse("Changing working directory to: `out'\nfatal error: unable to change directory to: `out'\n")
+        #expect(fatal.first?.severity == .fatalError && fatal.first?.isLocated == false)
+    }
+
+    @Test func messageWithLineButNoColumn() throws {
+        let log = """
+        w7.ly:1: warning: no \\version statement found, please add
+
+        \\version "2.26.0"
+
+        for future compatibility
+        Interpreting music...
+        """
+        let messages = LilyPondLogParser.parse(log)
+        let warning = try #require(messages.first)
+        #expect(messages.count == 1)
+        #expect(warning.file == "w7.ly" && warning.line == 1 && warning.column == 0 && warning.isLocated)
+        #expect(warning.message == "no \\version statement found, please add")
+        #expect(warning.link.startColumn == 0)
+    }
+
+    @Test func keepsTheLineThatExplainsASchemeError() throws {
+        let log = """
+        w2.ly:2:2: error: Guile signaled an error for the expression beginning here
+        #
+         (define x (car '()))
+        In procedure car: Wrong type argument in position 1 (expecting pair): ()
+        Interpreting music...
+        fatal error: failed files: "w2.ly"
+        """
+        let messages = LilyPondLogParser.parse(log)
+        #expect(messages.count == 1)
+        #expect(messages.first?.context == ["#", " (define x (car '()))",
+                                            "In procedure car: Wrong type argument in position 1 (expecting pair): ()"])
+    }
+
+    @Test func dropsTheSearchPathFromContext() {
+        let log = """
+        w3.ly:2:10: error: cannot find file: `d.ily'
+        (search path: `/opt/homebrew/share/lilypond/2.26.0/ly:/opt/homebrew/share/lilypond/2.26.0/ps:')
+        \\include 
+                 "d.ily"
+        Interpreting music...
+        """
+        #expect(LilyPondLogParser.parse(log).first?.context == ["\\include ", "         \"d.ily\""])
+    }
+
+    @Test func columnOneAndBlankLinesEndContext() {
+        let log = """
+        w5.ly:3:1: error: unknown command: `\\bogus'
+
+        \\bogus d }
+        w4.ly:2:28: error: unknown command: `\\bogus'
+        { c'4 \\times 2/3 { c d e } 
+                                   \\bogus }
+
+        Note: compilation failed and \\version outdated, did you
+        update input syntax with convert-ly?
+        """
+        let messages = LilyPondLogParser.parse(log)
+        #expect(messages.count == 2)
+        #expect(messages.first?.context == ["", "\\bogus d }"])
+        #expect(messages.last?.context.count == 2)
     }
 
     @Test func outputFiles() {

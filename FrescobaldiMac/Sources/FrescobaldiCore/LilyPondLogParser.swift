@@ -11,20 +11,26 @@ public struct LilyPondMessage: Equatable, Hashable, Sendable, Identifiable {
         public var isError: Bool { self != .warning }
     }
 
+    /// Empty for a message without a location, such as an unknown paper size.
     public var file: String
-    /// 1-based line.
+    /// 1-based line; 0 without a location.
     public var line: Int
-    /// 1-based column, in characters.
+    /// 1-based column, in characters; 0 without one (`file:1: warning: no
+    /// \version statement found`).
     public var column: Int
     public var severity: Severity
     public var message: String
-    /// The two lines LilyPond prints after the message: the source line split
-    /// at the error position.
+    /// The lines LilyPond prints after the message: usually the source line
+    /// split at the error position, for a Scheme error also the line that
+    /// explains it.
     public var context: [String]
     /// Index of the message line in the log (also used as the identity).
     public var logLine: Int
 
     public var id: Int { logLine }
+
+    /// Whether the message points at a place in a file.
+    public var isLocated: Bool { !file.isEmpty && line > 0 }
 
     public init(file: String, line: Int, column: Int, severity: Severity, message: String,
                 context: [String] = [], logLine: Int = 0) {
@@ -46,11 +52,16 @@ public struct LilyPondMessage: Equatable, Hashable, Sendable, Identifiable {
 /// Parses LilyPond's log output (stderr).
 ///
 /// Messages look like `file:LINE:COL: error: text`, COL 1-based, followed by
-/// two context lines. `fatal error: failed files: ...` is a summary without a
-/// location and is skipped.
+/// two context lines (the source line split at the column), `file:LINE:
+/// warning: text`, or `warning: text` without a location. `fatal error: failed files: ...` is a
+/// summary and is skipped.
 public enum LilyPondLogParser {
     private static let messagePattern = try! NSRegularExpression(
-        pattern: #"^(.+?):(\d+):(\d+): (error|warning|programming error|fatal error): (.*)$"#)
+        pattern: #"^(.+?):(\d+)(?::(\d+))?: (error|warning|programming error|fatal error): (.*)$"#)
+    private static let unlocatedPattern = try! NSRegularExpression(
+        pattern: #"^(error|warning|programming error|fatal error): (.*)$"#)
+    /// Most context a message keeps.
+    static let maxContext = 6
     private static let outputPattern = try! NSRegularExpression(
         pattern: #"(?:Converting to|MIDI output to) [`'"‘](.+?)['"’]\.\.\."#)
 
@@ -63,29 +74,44 @@ public enum LilyPondLogParser {
                 index += 1
                 continue
             }
+            // A message with a column has two source lines first (the first
+            // is empty for column 1); after them, or for a message without a
+            // column, more lines until a blank line, such as the one that
+            // explains a Scheme error.
             var context: [String] = []
             var next = index + 1
-            while context.count < 2 && next < lines.count && parseMessage(lines[next], logLine: next) == nil
+            while context.count < maxContext && next < lines.count && parseMessage(lines[next], logLine: next) == nil
                     && !isProgressLine(lines[next]) {
-                context.append(lines[next])
+                let line = lines[next]
+                if line.isEmpty && (message.column == 0 || context.count >= 2) { break }
+                context.append(line)
                 next += 1
             }
-            message.context = context
+            // `cannot find file` prints the search path before the source.
+            message.context = context.filter { !$0.hasPrefix("(search path:") }
             result.append(message)
             index = next
         }
         return result
     }
 
-    /// Parses one log line, or returns nil if it isn't a located message.
+    /// Parses one log line, or returns nil if it isn't a message.
     public static func parseMessage(_ line: String, logLine: Int = 0) -> LilyPondMessage? {
         let ns = line as NSString
-        guard let m = messagePattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
-            return nil
+        let range = NSRange(location: 0, length: ns.length)
+        guard let m = messagePattern.firstMatch(in: line, range: range) else {
+            guard let m = unlocatedPattern.firstMatch(in: line, range: range),
+                  let severity = LilyPondMessage.Severity(rawValue: ns.substring(with: m.range(at: 1))) else {
+                return nil
+            }
+            let text = ns.substring(with: m.range(at: 2))
+            if severity == .fatalError && text.hasPrefix("failed files") { return nil }
+            return LilyPondMessage(file: "", line: 0, column: 0, severity: severity, message: text, logLine: logLine)
         }
         let file = ns.substring(with: m.range(at: 1))
+        let columnRange = m.range(at: 3)
         guard let lineNumber = Int(ns.substring(with: m.range(at: 2))),
-              let column = Int(ns.substring(with: m.range(at: 3))),
+              let column = columnRange.location == NSNotFound ? 0 : Int(ns.substring(with: columnRange)),
               let severity = LilyPondMessage.Severity(rawValue: ns.substring(with: m.range(at: 4))) else {
             return nil
         }
@@ -144,6 +170,7 @@ public enum LilyPondLogParser {
     public static func resolvingPaths(_ messages: [LilyPondMessage], in log: String, base: URL) -> [LilyPondMessage] {
         let directories = directories(in: splitLines(log), base: base)
         return messages.map { message in
+            guard !message.file.isEmpty else { return message }
             var message = message
             message.file = resolve(message.file, at: message.logLine, directories: directories, base: base).path
             return message
