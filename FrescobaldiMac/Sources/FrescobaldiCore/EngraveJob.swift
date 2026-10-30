@@ -211,40 +211,55 @@ public final class EngraveJob: @unchecked Sendable {
 
 extension EngraveJob {
     /// Output files an earlier run left next to `source`, if they're at least
-    /// as new as it. Same rule as Frescobaldi's resultfiles: `name.ext`, then
-    /// `name-*[0-9].ext` (several `\book` blocks give `name-1.pdf`,
-    /// `name-2.pdf`, …) in natural order. Looks in `outputDirectory` instead
-    /// if the project has one.
-    public static func existingOutputs(for source: URL, outputDirectory: URL? = nil,
+    /// as new as it: `name.ext` and `name-*.ext` (several `\book` blocks give
+    /// `name-1.pdf`, `name-2.pdf`, …; `output-suffix` gives `name-parts.pdf`),
+    /// but not `name-a4.pdf` or `name-a4-1.pdf` when `name-a4.ly` is beside
+    /// the source or in `otherTargets`. The last run's files come first, `name.ext` then
+    /// natural order, then older ones, newest first. Looks in
+    /// `outputDirectory` instead if the project has one.
+    public static func existingOutputs(for source: URL, outputDirectory: URL? = nil, otherTargets: [URL] = [],
                                        fileManager: FileManager = .default) -> (pdfs: [URL], midis: [URL]) {
         let directory = outputDirectory ?? source.deletingLastPathComponent()
         let base = source.deletingPathExtension().lastPathComponent
         func modified(_ path: String) -> Date? {
             (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         }
+        func stem(_ name: String) -> String { (name as NSString).deletingPathExtension }
         guard let sourceDate = modified(source.path),
               let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return ([], []) }
+        let besideSource = outputDirectory == nil
+            ? names : (try? fileManager.contentsOfDirectory(atPath: source.deletingLastPathComponent().path)) ?? []
+        var others = Set(otherTargets.map { $0.deletingPathExtension().lastPathComponent })
+        others.formUnion(besideSource.filter { ($0 as NSString).pathExtension.lowercased() == "ly" }.map(stem))
+        others = others.filter { $0.hasPrefix(base + "-") }
+        func isOther(_ stem: String) -> Bool { others.contains { stem == $0 || stem.hasPrefix($0 + "-") } }
 
-        let matches = names.filter { name in
-            let stem = (name as NSString).deletingPathExtension
-            guard stem == base || (stem.hasPrefix(base + "-") && stem.last.map { ("0"..."9").contains($0) } == true)
-            else { return false }
+        let matches: [(name: String, date: Date)] = names.compactMap { name in
+            let stem = stem(name)
+            guard stem == base || (stem.hasPrefix(base + "-") && !isOther(stem)) else { return nil }
             var isDirectory: ObjCBool = false
             let path = directory.appendingPathComponent(name).path
             guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue,
-                  let date = modified(path) else { return false }
-            return date >= sourceDate
+                  let date = modified(path), date >= sourceDate else { return nil }
+            return (name, date)
         }
-        .sorted { a, b in
-            let aIsBase = (a as NSString).deletingPathExtension == base
-            let bIsBase = (b as NSString).deletingPathExtension == base
-            if aIsBase != bIsBase { return aIsBase }
-            return a.compare(b, options: [.numeric, .caseInsensitive]) == .orderedAscending
+        // One run writes its files within a minute of each other.
+        let lastRun = (matches.map(\.date).max() ?? .distantPast).addingTimeInterval(-60)
+        let sorted = matches.sorted { a, b in
+            let aIsLast = a.date >= lastRun, bIsLast = b.date >= lastRun
+            if aIsLast != bIsLast { return aIsLast }
+            if !aIsLast && a.date != b.date { return a.date > b.date }
+            let aStem = stem(a.name), bStem = stem(b.name)
+            if aStem != bStem {
+                return aStem == base || (bStem != base
+                    && aStem.compare(bStem, options: [.numeric, .caseInsensitive]) == .orderedAscending)
+            }
+            return a.name.compare(b.name, options: [.numeric, .caseInsensitive]) == .orderedAscending
         }
-        .map { directory.appendingPathComponent($0) }
+        .map { directory.appendingPathComponent($0.name) }
 
         func withExtensions(_ extensions: Set<String>) -> [URL] {
-            matches.filter { extensions.contains($0.pathExtension.lowercased()) }
+            sorted.filter { extensions.contains($0.pathExtension.lowercased()) }
         }
         return (withExtensions(["pdf"]), withExtensions(["mid", "midi"]))
     }

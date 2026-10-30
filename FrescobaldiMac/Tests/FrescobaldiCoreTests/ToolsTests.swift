@@ -111,10 +111,12 @@ private func pythonLyTool() -> PythonLyTool? {
             try fm.setAttributes([.modificationDate: now.addingTimeInterval(-age)], ofItemAtPath: path)
         }
         try file("song.ly", age: 100)
-        for name in ["song-10.pdf", "song-2.pdf", "song.pdf", "song-part1.pdf", "song.midi", "song-1.mid"] {
+        try file("song-a4.ly", age: 100)      // another target beside it
+        for name in ["song-10.pdf", "song-2.pdf", "song.pdf", "song-part1.pdf", "song.midi", "song-1.mid",
+                     "song-violin.midi", "song-a4.pdf"] {
             try file(name, age: 50)
         }
-        try file("song-draft.pdf", age: 50)   // doesn't end in a digit
+        try file("song-draft.pdf", age: 50)   // output-suffix = "draft"
         try file("songbook.pdf", age: 50)     // another base name
         try file("other.pdf", age: 50)
         try file("song.log", age: 50)
@@ -122,14 +124,44 @@ private func pythonLyTool() -> PythonLyTool? {
 
         let source = dir.appendingPathComponent("song.ly")
         var outputs = EngraveJob.existingOutputs(for: source)
-        #expect(outputs.pdfs.map(\.lastPathComponent) == ["song.pdf", "song-2.pdf", "song-10.pdf", "song-part1.pdf"])
-        #expect(outputs.midis.map(\.lastPathComponent) == ["song.midi", "song-1.mid"])
+        #expect(outputs.pdfs.map(\.lastPathComponent)
+                == ["song.pdf", "song-2.pdf", "song-10.pdf", "song-draft.pdf", "song-part1.pdf"])
+        #expect(outputs.midis.map(\.lastPathComponent) == ["song.midi", "song-1.mid", "song-violin.midi"])
+        #expect(EngraveJob.existingOutputs(for: dir.appendingPathComponent("song-a4.ly")).pdfs
+                    .map(\.lastPathComponent) == ["song-a4.pdf"])
 
         // Output older than the source is stale.
         try file("song.pdf", age: 200)
         outputs = EngraveJob.existingOutputs(for: source)
         #expect(outputs.pdfs.first?.lastPathComponent == "song-2.pdf")
         #expect(EngraveJob.existingOutputs(for: dir.appendingPathComponent("missing.ly")).pdfs.isEmpty)
+    }
+
+    /// A later run with another output-suffix (a date) comes first.
+    @Test func existingOutputsPreferTheLastRun() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("EngraveJob-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let now = Date()
+        func file(_ name: String, age: TimeInterval) throws {
+            let path = dir.appendingPathComponent(name).path
+            #expect(fm.createFile(atPath: path, contents: Data("x".utf8)))
+            try fm.setAttributes([.modificationDate: now.addingTimeInterval(-age)], ofItemAtPath: path)
+        }
+        try file("score.ly", age: 10_000)
+        try file("score.pdf", age: 9_000)
+        try file("score-2026-01-05.pdf", age: 5_000)
+        try file("score-2026-03-01.pdf", age: 20)
+        try file("score-2026-03-01-1.pdf", age: 10)
+        try file("score-2026-02-11.pdf", age: 2_000)
+        let source = dir.appendingPathComponent("score.ly")
+        #expect(EngraveJob.existingOutputs(for: source).pdfs.map(\.lastPathComponent)
+                == ["score-2026-03-01.pdf", "score-2026-03-01-1.pdf", "score-2026-02-11.pdf",
+                    "score-2026-01-05.pdf", "score.pdf"])
+        // A target elsewhere in the project, writing to the same output folder.
+        #expect(EngraveJob.existingOutputs(for: source, otherTargets: [URL(fileURLWithPath: "/p/parts/score-2026-03-01.ly")])
+                    .pdfs.first?.lastPathComponent == "score-2026-02-11.pdf")
     }
 
     @Test func environment() {

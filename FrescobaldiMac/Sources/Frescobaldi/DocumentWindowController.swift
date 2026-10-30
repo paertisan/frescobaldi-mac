@@ -692,7 +692,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         let target = project.target ?? project.targets.first
         if result.pdfs.isEmpty, let target {
-            result.pdfs = EngraveJob.existingOutputs(for: target, outputDirectory: project.outputDirectory).pdfs
+            result.pdfs = EngraveJob.existingOutputs(for: target, outputDirectory: project.outputDirectory,
+                                                     otherTargets: project.targets).pdfs
         }
         if let base = target?.deletingPathExtension().lastPathComponent,
            let index = result.pdfs.firstIndex(where: { $0.deletingPathExtension().lastPathComponent == base }) {
@@ -715,7 +716,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// Shows the PDF from an earlier run, and enables Play for its MIDI, if
     /// they're at least as new as the document (as Frescobaldi does).
     private func showExistingOutput(for main: URL, in project: LilyPondProject) {
-        let outputs = EngraveJob.existingOutputs(for: main, outputDirectory: project.outputDirectory)
+        let outputs = EngraveJob.existingOutputs(for: main, outputDirectory: project.outputDirectory,
+                                                 otherTargets: project.targets)
         guard !outputs.pdfs.isEmpty || !outputs.midis.isEmpty else { return }
         engravedSource = main
         engraveModel.pdfs = outputs.pdfs
