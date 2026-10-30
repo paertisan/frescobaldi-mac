@@ -72,6 +72,7 @@ enum MainMenu {
         delegate.templatesMenu.delegate = delegate
         templates.submenu = delegate.templatesMenu
         menu.addItem(templates)
+        add(menu, "New Project…", #selector(AppDelegate.newProject(_:)), "n", [.command, .option], target: delegate)
         add(menu, "Open…", #selector(NSDocumentController.openDocument(_:)), "o")
         let recent = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         delegate.openRecentMenu.delegate = delegate
