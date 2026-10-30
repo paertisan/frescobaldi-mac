@@ -87,7 +87,21 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         observers.append(center.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.preferencesChanged() }
         })
-        view = scrollView
+        // Pin the editor below the toolbar (the safe area) instead of relying
+        // on automatic scroll insets, which a transparent titlebar breaks
+        // (text scrolled under the title, e.g. after leaving full screen).
+        let container = NSView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
+        container.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        view = container
     }
 
     override func viewDidAppear() {
