@@ -19,6 +19,13 @@ final class LilyPondDocument: NSDocument {
     /// editor can skip auto-indent and similar edit hooks.
     private(set) var isLoading = false
 
+    private static var nextBridgeID = 1
+    /// Short id for Claude's tools ("doc-1"), stable while the document is open.
+    private(set) lazy var bridgeID: String = {
+        defer { Self.nextBridgeID += 1 }
+        return "doc-\(Self.nextBridgeID)"
+    }()
+
     override class var autosavesInPlace: Bool { true }
     override class var readableTypes: [String] { LilyPondType.all }
     override class var writableTypes: [String] { LilyPondType.all }

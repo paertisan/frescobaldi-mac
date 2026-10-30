@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import FrescobaldiCore
+import FrescobaldiMCP
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,7 @@ final class SettingsWindowController: NSWindowController {
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(Self.tab("General", symbol: "gearshape", view: GeneralSettingsView()))
         tabs.addTabViewItem(Self.tab("Editor", symbol: "character.cursor.ibeam", view: EditorSettingsView()))
+        tabs.addTabViewItem(Self.tab("Claude", symbol: "sparkles", view: ClaudeSettingsView()))
         let window = NSWindow(contentViewController: tabs)
         window.styleMask = [.titled, .closable]
         window.title = "General"
@@ -178,5 +180,89 @@ struct EditorSettingsView: View {
 
     private func notify() {
         NotificationCenter.default.post(name: Preferences.didChange, object: nil)
+    }
+}
+
+/// Claude access to open documents, and how to add frescobaldi-mcp to
+/// Claude Code or Claude Desktop.
+struct ClaudeSettingsView: View {
+    @AppStorage(Preferences.Key.claudeAccess) private var claudeAccess = true
+    @State private var status = ""
+    @State private var copied: String?
+
+    private var helper: URL? { ClaudeBridge.helperURL }
+
+    private var claudeCodeCommand: String {
+        guard let helper else { return "" }
+        let quoted = "'" + helper.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "claude mcp add --scope user frescobaldi -- \(quoted)"
+    }
+
+    private var desktopConfig: String {
+        guard let helper else { return "" }
+        let config: JSONValue = ["mcpServers": ["frescobaldi": ["command": .string(helper.path)]]]
+        return config.encodedString(pretty: true)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Let Claude read and edit open documents", isOn: $claudeAccess)
+                LabeledContent("Status") {
+                    Text(status).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("Claude's changes are ordinary edits you can undo. Only apps running under your account can connect.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Section("Set Up") {
+                if helper == nil {
+                    Text("frescobaldi-mcp isn't in this build. Build the app with scripts/build-app.sh.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Claude Code") {
+                        copyButton("Copy Command", text: claudeCodeCommand)
+                    }
+                    Text(claudeCodeCommand)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                    LabeledContent("Claude Desktop") {
+                        copyButton("Copy Configuration", text: desktopConfig)
+                    }
+                    Text("Add it to claude_desktop_config.json (Claude > Settings > Developer > Edit Config), then restart Claude.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear(perform: refresh)
+        .onChange(of: claudeAccess) {
+            NotificationCenter.default.post(name: Preferences.didChange, object: nil)
+            refresh()
+        }
+    }
+
+    private func copyButton(_ title: String, text: String) -> some View {
+        Button(copied == title ? "Copied" : title) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = title
+        }
+    }
+
+    private func refresh() {
+        let bridge = ClaudeBridge.shared
+        bridge.update()
+        if let error = bridge.startError, claudeAccess {
+            status = "Not available: \(error)"
+        } else {
+            status = bridge.isRunning ? "Claude can access open documents" : "Off"
+        }
     }
 }

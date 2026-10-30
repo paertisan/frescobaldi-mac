@@ -10,6 +10,7 @@ enum Preferences {
         static let editorFontSize = "editorFontSize"
         static let indentWidth = "indentWidth"
         static let showLineNumbers = "showLineNumbers"
+        static let claudeAccess = "claudeAccess"
     }
 
     static func registerDefaults() {
@@ -19,6 +20,7 @@ enum Preferences {
             Key.editorFontSize: 13.0,
             Key.indentWidth: 2,
             Key.showLineNumbers: true,
+            Key.claudeAccess: true,
         ])
     }
 
@@ -26,6 +28,8 @@ enum Preferences {
     static var engraveOnSave: Bool { UserDefaults.standard.bool(forKey: Key.engraveOnSave) }
     static var indentWidth: Int { max(1, min(8, UserDefaults.standard.integer(forKey: Key.indentWidth))) }
     static var showLineNumbers: Bool { UserDefaults.standard.bool(forKey: Key.showLineNumbers) }
+    /// Let frescobaldi-mcp (Claude) read and edit open documents.
+    static var claudeAccess: Bool { UserDefaults.standard.bool(forKey: Key.claudeAccess) }
 
     static var editorFont: NSFont {
         let size = UserDefaults.standard.double(forKey: Key.editorFontSize)

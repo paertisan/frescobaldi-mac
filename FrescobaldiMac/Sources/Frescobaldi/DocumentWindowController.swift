@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import FrescobaldiCore
+import FrescobaldiMCP
 import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -29,6 +30,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         .appendingPathComponent("Frescobaldi-\(UUID().uuidString)", isDirectory: true)
     private var issueIndex = -1
     private var logWasShown = false
+    /// Waiting for a job to finish (Claude's engrave_document).
+    private var engraveCompletions: [ObjectIdentifier: [EngraveCompletion]] = [:]
     private var cancellables: Set<AnyCancellable> = []
 
     init(document: LilyPondDocument) {
@@ -263,12 +266,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         job?.cancel()
     }
 
-    func engrave(mode: EngraveJob.Mode, saveFirst: Bool = true) {
+    typealias EngraveCompletion = (Result<EngraveJob.Result, Error>) -> Void
+
+    /// Engraves the document. With a completion (requests from Claude),
+    /// problems are reported to it instead of in alerts.
+    func engrave(mode: EngraveJob.Mode, saveFirst: Bool = true, completion: EngraveCompletion? = nil) {
         job?.cancel()
         guard let lilypond = Preferences.lilypond() else {
             engraveModel.status = .failed("LilyPond not found")
-            showLilyPondMissingAlert()
+            if let completion {
+                completion(.failure(BridgeError("LilyPond wasn't found. Install it (brew install lilypond) or set its location in Frescobaldi's Settings.")))
+            } else {
+                showLilyPondMissingAlert()
+            }
             return
+        }
+        func fail(_ error: Error) {
+            if let completion { completion(.failure(error)) } else { presentError(error) }
         }
         if let url = lilyDocument.fileURL {
             if saveFirst && lilyDocument.isDocumentEdited {
@@ -278,13 +292,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                     guard let self else { return }
                     self.lilyDocument.isSavingForEngrave = false
                     if let error {
-                        self.presentError(error)
+                        fail(error)
                         return
                     }
-                    self.run(lilypond: lilypond, source: url, mode: mode)
+                    self.run(lilypond: lilypond, source: url, mode: mode, completion: completion)
                 }
             } else {
-                run(lilypond: lilypond, source: url, mode: mode)
+                run(lilypond: lilypond, source: url, mode: mode, completion: completion)
             }
         } else {
             // Untitled: engrave a temporary copy.
@@ -293,19 +307,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 let name = lilyDocument.displayName.replacingOccurrences(of: "/", with: "-")
                 let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
                 try Data(lilyDocument.text.utf8).write(to: source)
-                run(lilypond: lilypond, source: source, mode: mode)
+                run(lilypond: lilypond, source: source, mode: mode, completion: completion)
             } catch {
-                presentError(error)
+                fail(error)
             }
         }
     }
 
-    private func run(lilypond: URL, source: URL, mode: EngraveJob.Mode) {
+    private func run(lilypond: URL, source: URL, mode: EngraveJob.Mode, completion: EngraveCompletion?) {
         let job = EngraveJob(lilypond: lilypond, source: source, mode: mode)
         self.job = job
         engravedSource = source
         engraveModel.status = .running(mode)
         engraveModel.log = ""
+        if let completion { engraveCompletions[ObjectIdentifier(job), default: []].append(completion) }
         do {
             try job.start(output: { [weak self] text in
                 DispatchQueue.main.async {
@@ -318,10 +333,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         } catch {
             self.job = nil
             engraveModel.status = .failed("Couldn't start LilyPond: \(error.localizedDescription)")
+            engraveCompletions.removeValue(forKey: ObjectIdentifier(job))
+            completion?(.failure(BridgeError("Couldn't start LilyPond: \(error.localizedDescription)")))
         }
     }
 
     private func finish(_ finishedJob: EngraveJob, _ result: EngraveJob.Result) {
+        // Whoever waits for this job gets its result, even if a newer one replaced it.
+        for completion in engraveCompletions.removeValue(forKey: ObjectIdentifier(finishedJob)) ?? [] {
+            completion(.success(result))
+        }
         guard finishedJob === job else { return }
         job = nil
         engraveModel.log = result.log
@@ -543,10 +564,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     @objc func reindent(_ sender: Any?) { runLyEdit(.indent, name: "Re-indent") }
     @objc func reformat(_ sender: Any?) { runLyEdit(.reformat, name: "Reformat") }
 
+    typealias LyEditCompletion = (Result<Bool, Error>) -> Void
+
     /// Runs python-ly off the main thread, then applies the result as one
-    /// undoable change.
-    private func runLyEdit(_ edit: LyEdit, name: String) {
+    /// undoable change: to the selection, or everything if there is none or
+    /// `wholeDocument` is set. A completion (requests from Claude) gets
+    /// whether the text changed, or the error instead of an alert.
+    func runLyEdit(_ edit: LyEdit, name: String, wholeDocument: Bool = false, completion: LyEditCompletion? = nil) {
         guard let tool = AppResources.pythonLyTool else {
+            if let completion {
+                completion(.failure(BridgeError("python-ly isn't available: Frescobaldi's Tools need Python 3.")))
+                return
+            }
             let alert = NSAlert()
             alert.messageText = "python-ly isn't available"
             alert.informativeText = "The Tools menu needs Python 3 and the bundled python-ly. Install the Xcode Command Line Tools or Homebrew's python."
@@ -555,29 +584,45 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         let text = lilyDocument.text
         let selection = editor.textView.selectedRange()
+        let target = selection.length > 0 && !wholeDocument ? selection : nil
         let indentWidth = Preferences.indentWidth
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try tool.apply(edit, to: text, selection: selection.length > 0 ? selection : nil,
-                                                 indentWidth: indentWidth) }
+            let result = Result { try tool.apply(edit, to: text, selection: target, indentWidth: indentWidth) }
             DispatchQueue.main.async {
-                self?.applyLyResult(result, original: text, selection: selection, name: name)
+                self?.applyLyResult(result, original: text, selection: selection, name: name, completion: completion)
             }
         }
     }
 
-    private func applyLyResult(_ result: Result<String, Error>, original: String, selection: NSRange, name: String) {
+    private func applyLyResult(_ result: Result<String, Error>, original: String, selection: NSRange, name: String,
+                               completion: LyEditCompletion?) {
         switch result {
         case let .failure(error):
-            if let window { NSAlert(error: error).beginSheetModal(for: window) }
+            if let completion {
+                completion(.failure(error))
+            } else if let window {
+                NSAlert(error: error).beginSheetModal(for: window)
+            }
         case let .success(newText):
             // The user kept typing meanwhile: don't apply a stale result.
-            guard lilyDocument.text == original else { NSSound.beep(); return }
-            guard let change = TextReplacement.between(original, newText) else { return }
+            guard lilyDocument.text == original else {
+                if let completion {
+                    completion(.failure(BridgeError("The document changed while the tool ran; nothing was applied.")))
+                } else {
+                    NSSound.beep()
+                }
+                return
+            }
+            guard let change = TextReplacement.between(original, newText) else {
+                completion?(.success(false))
+                return
+            }
             let delta = (newText as NSString).length - (original as NSString).length
             let newSelection = selection.length > 0
                 ? NSRange(location: selection.location, length: max(0, selection.length + delta))
                 : NSRange(location: min(selection.location, (newText as NSString).length), length: 0)
             editor.textView.replace(change.range, with: change.replacement, selection: newSelection, actionName: name)
+            completion?(.success(true))
         }
     }
 }

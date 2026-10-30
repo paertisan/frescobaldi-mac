@@ -19,7 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ClaudeBridge.shared.update()
+        NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ClaudeBridge.shared.update() }
+        }
         NSApp.activate()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        ClaudeBridge.shared.stop()
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
