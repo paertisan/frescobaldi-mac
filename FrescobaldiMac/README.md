@@ -9,7 +9,9 @@ implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 (Swift 6.4) and was tested by hand on macOS 27 with LilyPond 2.26.0:
 editing, engraving, point-and-click both ways, issues, MIDI, the Tools
 menu, templates and Settings all work, in light and dark mode.
-`FrescobaldiCore` passes its 68 tests on macOS and on Linux (Swift 6.2).
+`FrescobaldiCore` passes its 69 tests on macOS and on Linux (Swift 6.2), and
+the MCP server its 12 on macOS. Claude can work with scores through the
+bundled MCP server (see below).
 [MAC-CHECKLIST.md](MAC-CHECKLIST.md) lists what was checked and what is
 still open.
 
@@ -41,6 +43,7 @@ still open.
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
 | Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders) |
+| Claude (MCP) | `frescobaldi-mcp` helper: file tools, plus a Unix-socket bridge to open documents. See [below](#claude-and-other-ai-clients-mcp) |
 
 LilyPond search order: user setting, `/opt/homebrew/bin`, `/usr/local/bin`,
 `/opt/local/bin`, `/opt/lilypond/bin`,
@@ -49,6 +52,44 @@ LilyPond search order: user setting, `/opt/homebrew/bin`, `/usr/local/bin`,
 
 Shortcuts follow macOS conventions. Ctrl+Cmd+F for full screen and the
 Window-menu tab commands come from AppKit automatically.
+
+## Claude and other AI clients (MCP)
+
+`frescobaldi-mcp` (bundled as `Frescobaldi.app/Contents/Helpers/frescobaldi-mcp`)
+is a [Model Context Protocol](https://modelcontextprotocol.io) server, so
+Claude can engrave scores, look at the result and edit what you have open.
+Settings > Claude shows the setup with the right path and a Copy button:
+
+```bash
+claude mcp add --scope user frescobaldi -- '/Applications/Frescobaldi.app/Contents/Helpers/frescobaldi-mcp'
+```
+
+For Claude Desktop, add it to `claude_desktop_config.json`
+(`{"mcpServers": {"frescobaldi": {"command": "…/frescobaldi-mcp"}}}`) and
+restart Claude.
+
+| Tool | What it does |
+|---|---|
+| `engrave` | Runs LilyPond on a `.ly` file or on source text; returns errors and warnings (file, 1-based line and column, source context), PDFs and MIDI files |
+| `render_page` | A PDF page as PNG, so Claude sees the score. Takes a `.pdf`, a `.ly` (its up-to-date PDF) or an open document. Long blank stretches are shortened unless `trim` is false |
+| `transform` | The Tools menu via python-ly: transpose, translate pitch names, relative ↔ absolute, simplify accidentals, re-indent, reformat. On a file, text, or an open document (its selection, as one undo step) |
+| `outline` | `\version`, `\include`, variables, blocks and `%%` markers with line numbers |
+| `lilypond_info`, `templates` | The LilyPond in use (same setting as the app); the score templates with `\version` filled in |
+| `list_documents`, `get_document` | Open documents; text, selection and cursor, unsaved state, PDF, last engrave's issues |
+| `edit_document` | `old_text` → `new_text` replacements (each must match once) or a whole new text, applied as one change the user can undo ("Undo Claude Edit") |
+| `engrave_document` | ⌘R for an open document (saves first), waits and returns the issues |
+| `reveal` | Selects a line/column range in the editor; the PDF highlights it |
+
+File tools work without the app. The document tools talk to the running
+app over a Unix socket, `~/Library/Application Support/Frescobaldi/bridge.sock`
+(folder 0700, socket 0600; the app also checks the peer's user id), one
+JSON request and answer per connection. Turn it off in Settings > Claude.
+The protocol is implemented by hand (JSON-RPC over stdio, tools only), so
+the package still has no dependencies.
+
+Environment variables for the helper: `FRESCOBALDI_LILYPOND` (LilyPond to
+use instead of the app's setting), `FRESCOBALDI_RESOURCES` (templates and
+python-ly driver), `PYTHON_LY_DIR`, `FRESCOBALDI_BRIDGE_SOCKET`.
 
 ## Verified facts (LilyPond 2.26.0, macOS 27)
 
@@ -108,6 +149,8 @@ target is macOS-only in `Package.swift`.
 |---|---|
 | `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing`, `LineIndex` |
 | `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `MIDIPlayer`, `SettingsWindowController`, `Preferences` |
+| `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport` |
+| `Sources/frescobaldi-mcp` | The helper's `main.swift` |
 | `Resources` | Templates and the python-ly driver, copied into the bundle |
 | `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
 

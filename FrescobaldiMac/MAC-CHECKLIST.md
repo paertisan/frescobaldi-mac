@@ -14,7 +14,7 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
-PYTHON_LY_DIR=build/python swift test   # 68 tests, python-ly ones included
+PYTHON_LY_DIR=build/python swift test   # 69 core + 12 MCP tests, python-ly ones included
 ```
 
 The app compiled on the first try. None of the expected problems below
@@ -91,6 +91,27 @@ checked by launching with `--args -NSRequiresAquaSystemAppearance YES`.
       test tool can't confirm save sheets, so the copy itself is untested.
 - [x] View: toggling the sidebar, issues panel and preview; Zoom In/Out/Fit
       Width; the floating page/zoom controls (Liquid Glass on macOS 26).
+
+## 2b. Claude (MCP)
+
+Checked by driving `Contents/Helpers/frescobaldi-mcp` over stdio with a
+small MCP client (initialize, tools/list, tools/call), with the app running.
+
+- [x] `initialize` negotiates the protocol version; `tools/list` lists 11
+      tools; unknown methods and tools get JSON-RPC errors.
+- [x] `engrave` on text and files returns issues with line and column;
+      `transform`, `outline`, `templates`, `lilypond_info` work without the app.
+- [x] `render_page` returns a legible PNG (a one-page minuet: 900×489 px
+      after trimming instead of 900×1273).
+- [x] With the app: `list_documents`, `get_document` (selection and cursor),
+      `edit_document` (one "Undo Claude Edit" step; ambiguous `old_text` is
+      refused), `transform` on a document, `engrave_document` right after an
+      edit (the document is saved first), `reveal`, clear errors for unknown
+      documents and lines.
+- [x] Settings > Claude: the switch removes and recreates the socket; the
+      helper then says access is off. Copy buttons show the helper's path.
+- [ ] A real Claude Code or Claude Desktop session using the server (no
+      macOS `claude` CLI on the test machine).
 
 ## 3. Things to look at closely
 
