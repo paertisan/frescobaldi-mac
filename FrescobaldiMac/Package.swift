@@ -26,16 +26,37 @@ var products: [Product] = [
 ]
 
 #if os(macOS)
-// The app needs AppKit, so it only exists on macOS. Elsewhere the core
-// library and its tests still build (`swift test` on Linux).
-targets.append(
+// The app and the MCP server need AppKit, CoreGraphics and Darwin sockets,
+// so they only exist on macOS. Elsewhere the core library and its tests
+// still build (`swift test` on Linux).
+targets += [
     .executableTarget(
         name: "Frescobaldi",
-        dependencies: ["FrescobaldiCore"],
+        dependencies: ["FrescobaldiCore", "FrescobaldiMCP"],
         path: "Sources/Frescobaldi"
-    )
-)
-products.append(.executable(name: "Frescobaldi", targets: ["Frescobaldi"]))
+    ),
+    // MCP server for Claude and other AI clients: file tools, plus a bridge
+    // (Unix socket) to the running app. Bundled as Contents/Helpers/frescobaldi-mcp.
+    .target(
+        name: "FrescobaldiMCP",
+        dependencies: ["FrescobaldiCore"],
+        path: "Sources/FrescobaldiMCP"
+    ),
+    .executableTarget(
+        name: "frescobaldi-mcp",
+        dependencies: ["FrescobaldiMCP"],
+        path: "Sources/frescobaldi-mcp"
+    ),
+    .testTarget(
+        name: "FrescobaldiMCPTests",
+        dependencies: ["FrescobaldiMCP"],
+        path: "Tests/FrescobaldiMCPTests"
+    ),
+]
+products += [
+    .executable(name: "Frescobaldi", targets: ["Frescobaldi"]),
+    .executable(name: "frescobaldi-mcp", targets: ["frescobaldi-mcp"]),
+]
 #endif
 
 let package = Package(

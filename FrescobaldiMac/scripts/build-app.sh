@@ -22,8 +22,9 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
-echo "==> Building Frescobaldi ($CONFIG, arm64)"
+echo "==> Building Frescobaldi and frescobaldi-mcp ($CONFIG, arm64)"
 swift build -c "$CONFIG" --arch arm64 --product Frescobaldi
+swift build -c "$CONFIG" --arch arm64 --product frescobaldi-mcp
 BIN="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)"
 
 if [[ ! -f "$BUILD/python/ly/__init__.py" ]]; then
@@ -41,8 +42,10 @@ fi
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/python"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources/python"
 cp "$BIN/Frescobaldi" "$APP/Contents/MacOS/Frescobaldi"
+# The MCP server Claude runs (see Settings > Claude).
+cp "$BIN/frescobaldi-mcp" "$APP/Contents/Helpers/frescobaldi-mcp"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp -R "$ROOT/Resources/Templates" "$APP/Contents/Resources/Templates"
 cp "$ROOT/Resources/python/fmac_lytool.py" "$APP/Contents/Resources/python/"
@@ -54,6 +57,7 @@ find "$APP" -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP" -name '.DS_Store' -delete
 
 echo "==> Signing (ad hoc)"
+codesign --force --sign - --timestamp=none "$APP/Contents/Helpers/frescobaldi-mcp"
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --strict "$APP"
 
