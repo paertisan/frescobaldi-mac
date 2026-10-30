@@ -71,14 +71,14 @@ restart Claude.
 
 | Tool | What it does |
 |---|---|
-| `engrave` | Runs LilyPond on a `.ly` file or on source text; returns errors and warnings (file, 1-based line and column, source context), PDFs and MIDI files |
+| `engrave` | Runs LilyPond on a `.ly` file (an include file engraves its target, with the project's include paths and output folder) or on source text; returns errors and warnings (file, 1-based line and column, source context), PDFs and MIDI files |
 | `render_page` | A PDF page as PNG, so Claude sees the score. Takes a `.pdf`, a `.ly` (its up-to-date PDF) or an open document. Long blank stretches are shortened unless `trim` is false |
 | `transform` | The Tools menu via python-ly: transpose, translate pitch names, relative ↔ absolute, simplify accidentals, re-indent, reformat. On a file, text, or an open document (its selection, as one undo step) |
 | `outline` | `\version`, `\include`, variables, blocks and `%%` markers with line numbers |
 | `lilypond_info`, `templates` | The LilyPond in use (same setting as the app); the score templates with `\version` filled in |
 | `list_documents`, `get_document` | Open documents; text, selection and cursor, unsaved state, PDF, last engrave's issues |
 | `edit_document` | `old_text` → `new_text` replacements (each must match once) or a whole new text, applied as one change the user can undo ("Undo Claude Edit") |
-| `engrave_document` | ⌘R for an open document (saves first), waits and returns the issues |
+| `engrave_document` | ⌘R for an open document (saves first; its own target, or the one pinned in the target menu), waits and returns the issues |
 | `reveal` | Selects a line/column range in the editor; the PDF highlights it |
 
 File tools work without the app. The document tools talk to the running
@@ -96,23 +96,64 @@ python-ly driver), `PYTHON_LY_DIR`, `FRESCOBALDI_BRIDGE_SOCKET`.
 
 Larger scores are usually split into files: the music in one include file
 per instrument, shared settings in a style sheet, and small `.ly` files
-that put the score and the parts together. The app helps with that:
+that put the score and the parts together. The app helps with that, and
+takes up Frescobaldi's wishes for projects
+([#1301](https://github.com/frescobaldi/frescobaldi/issues/1301),
+[#1069](https://github.com/frescobaldi/frescobaldi/issues/1069),
+[#798](https://github.com/frescobaldi/frescobaldi/issues/798)) without
+a project dialog to fill in first:
 
-- **Main file.** A file's project main file is its `-*- master: ...;`
-  document variable (Frescobaldi's convention, in the first or last five
-  lines), or for an include file the `.ly` nearby that includes it. ⌘R in
-  any file of the project engraves the main file (named in the status)
-  after saving the project's edited documents; issue markers and cursor
-  highlighting stay on the file being edited.
+- **Targets.** The files to engrave are the `.ly` files that make output
+  by themselves (a top-level `\score`, `\book`, `\bookpart`, music or
+  `\markup`, also through files they include at top level), except ones
+  only used inside another file's music. The project folder is the main
+  file's folder, or the one above it when the main file includes files
+  from there (as `parts/flute.ly` includes `../music/flute.ily`), or
+  wherever `frescobaldi.json` is.
+- **What ⌘R engraves.** The toolbar's target menu works like Xcode's
+  scheme menu. *Automatic* engraves the current file's target: the file
+  itself if it's a target, its `-*- master: ...;` document variable
+  (Frescobaldi's convention), or a target that includes it (the default
+  target if several do). You can also pin one target, choose All Targets
+  (⌥⌘R; a few LilyPond runs at a time) or a build command. The choice is
+  kept per project folder. Edited files of the project are saved first;
+  issue markers and cursor highlighting stay on the file being edited.
+  An include file nothing uses, or a `.ly` with only definitions, isn't
+  engraved alone: an alert says why and offers the main target.
+- **`frescobaldi.json`.** LilyPond > Project Settings… (or the gear in the
+  sidebar) writes it at the project folder, and only when a setting
+  changes. Everything is optional:
+
+  ```json
+  {
+    "targets": ["score.ly", "parts/flute.ly"],
+    "defaultTarget": "score.ly",
+    "includePaths": ["../openlilylib"],
+    "outputDirectory": "build",
+    "commands": [{ "name": "Parts", "command": "make parts", "directory": "." }]
+  }
+  ```
+
+  Without `targets` they're found as above. Include paths go to LilyPond
+  as `-I` and are used by the include tree too. With an output folder
+  PDFs and MIDI files go there (`build/flute.pdf`), and existing ones are
+  found there on open. Build commands run with `/bin/sh` in the project
+  folder (or `directory`); LilyPond's messages in their output become
+  clickable issues, also when make runs LilyPond in another folder, and
+  the PDF reloads. Commands from a project file run only after you've
+  seen and allowed each one; the ones you type in Project Settings don't
+  ask.
 - **Project sidebar.** Switch the sidebar from Outline to Project for the
-  include tree from the main file (resolved as LilyPond 2.26 does:
-  relative to the including file, then the main file's folder, then
+  targets (with a button that engraves each), the include tree from the
+  main file (resolved as LilyPond 2.26 does: relative to the including
+  file, then the main file's folder, then the include paths, then
   LilyPond's own `ly` folder), the project folder, and suggestions:
   missing includes and cycles, absolute paths (the project won't build on
   another computer), files outside the project, `.ly` files used as
-  includes, `.ily` files nothing includes, a main file without
-  `\version`. Libraries the project uses don't get organization hints.
-  Clicking a file opens it as a tab, at the line in question.
+  includes, `.ily` files nothing includes, a file with nothing to
+  engrave, a main file without `\version`, problems in
+  `frescobaldi.json`. Libraries the project uses don't get organization
+  hints. Clicking a file opens it as a tab, at the line in question.
 - **New Project** (⌥⌘N) creates that layout for piano, voice and piano,
   SATB choir, string quartet or chamber orchestra: `<name>.ly`,
   `style.ily`, `music/global.ily`, `music/<part>.ily` and `parts/<part>.ly`.

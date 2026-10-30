@@ -144,6 +144,36 @@ sheet with absolute includes of a music font) and generated projects.
 - [ ] The New Project panel itself up to Create (the automation tool
       can't drive save panels); the panel opens with the ensemble menu.
 
+## 2d. Targets, project settings and build commands
+
+Checked with a generated chamber-orchestra project (a score and 12 parts)
+in dark and light mode, and the Mahler project (read only).
+
+- [x] Targets: the score and the 12 parts (grouped under a collapsed
+      `parts` folder in the sidebar); the Mahler project has one,
+      `mahler9-I-p1-2.ly`. The toolbar shows the current file's target
+      (`spring-serenade.ly` from `music/flute.ily`).
+- [x] ⌘R from `music/flute.ily` engraves the score; Engrave All Targets
+      engraves 13 files in 4.8 s ("Engraving 13 targets (n done)…") and
+      keeps the score in the preview; the sidebar's ▶ engraves one part.
+- [x] An include file nothing uses: "No Target" in the toolbar, a
+      suggestion in the sidebar, and ⌘R explains instead of engraving,
+      with a button that engraves the main score.
+- [x] Project Settings…: the sheet in dark mode; setting an output folder
+      and a command writes only those two keys to `frescobaldi.json`; the
+      score then engraves into `build/` with point-and-click links.
+- [x] A build command (`make parts`, whose Makefile runs LilyPond inside
+      `parts/` with `-o ../build`): its two errors land on the right line
+      of `music/flute.ily` with markers. Apple's make doesn't print which
+      folder it enters, so the PDF is found by name among the files the
+      command wrote.
+- [x] A command added to `frescobaldi.json` by hand asks first, showing
+      the command and its folder; it runs after Run, and Cancel is the
+      default button.
+- [ ] The toolbar target menu opened by hand: the automation tool can't
+      open pop-up menus in the background, so its look and choosing in it
+      are unchecked (its title follows the choice and the current file).
+
 ## 3. Things to look at closely
 
 - **Line-number ruler with `fullSizeContentView`.** It did draw over the
