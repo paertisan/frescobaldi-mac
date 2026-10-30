@@ -176,6 +176,15 @@ public struct LilyPondProject: Sendable {
     /// `url` relative to the project folder.
     public func relativePath(_ url: URL) -> String { Self.relativePath(url, to: root) }
 
+    /// Normalized paths of `target` and every file it includes.
+    public func includedPaths(of target: URL, read: @escaping Reader = diskReader,
+                              fileManager: FileManager = .default) -> Set<String> {
+        if Self.normalized(target) == Self.normalized(main) { return includedPaths }
+        return Self.paths(in: Self.includeTree(main: target, cache: SourceCache(read: read),
+                                               includeDirectories: includeDirectories, root: root,
+                                               fileManager: fileManager))
+    }
+
     // MARK: Main file
 
     /// The file to engrave for `file`: its `master` variable, otherwise (for

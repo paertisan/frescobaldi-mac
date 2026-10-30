@@ -33,6 +33,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private var engravedByCommand = false
     /// Export PDF's engraving for publishing, while it runs.
     private var exportJob: EngraveJob?
+    /// The temporary copy an untitled document is engraved from.
+    private var untitledSource: URL?
     private lazy var targetMenu = TargetMenuController(model: projectModel) { [weak self] in
         self?.lilyDocument.displayName ?? ""
     }
@@ -148,6 +150,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             self?.editor.textView.showFindIndicator(for: item.range)
         }
         preview.onTextEditLink = { [weak self] link in self?.open(link) }
+        editor.issuePath = { [weak self] in self?.lilyDocument.fileURL?.path ?? self?.untitledSource?.path }
+        NotificationCenter.default.publisher(for: IssueMarkerStore.didEdit)
+            .sink { [weak self] note in
+                guard let self, let path = note.userInfo?["path"] as? String,
+                      let edit = note.userInfo?["edit"] as? LineEdit else { return }
+                let moved = IssueMarkers.move(self.engraveModel.messages, by: edit, in: path)
+                if moved != self.engraveModel.messages { self.engraveModel.messages = moved }
+            }
+            .store(in: &cancellables)
         engraveModel.onSelectMessage = { [weak self] message in
             // A message without a location is only in the log.
             if message.isLocated { self?.open(message.link) } else { self?.engraveModel.selectedTab = .log }
@@ -353,6 +364,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 try FileManager.default.createDirectory(at: untitledDirectory, withIntermediateDirectories: true)
                 let name = lilyDocument.displayName.replacingOccurrences(of: "/", with: "-")
                 let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
+                untitledSource = source
                 try Data(lilyDocument.text.utf8).write(to: source)
                 start(EngraveRun(jobs: [EngraveJob(lilypond: lilypond, source: source, mode: mode)], names: [name]),
                       mode: mode, completion: completion)
@@ -645,8 +657,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             engraveModel.status = .finished(succeeded: result.succeeded, errors: engraveModel.errorCount,
                                             warnings: engraveModel.warningCount, duration: result.duration)
         }
-        // Markers for this document's own file, also when the main file was engraved.
-        editor.showIssues(result.messages, forPath: lilyDocument.fileURL?.path ?? finishedRun.jobs.first?.source.path)
+        // Markers in every window showing a file this run read.
+        if !result.cancelled {
+            IssueMarkerStore.shared.update(with: result.messages, covering: filesRead(by: finishedRun))
+        }
         projectModel.refresh(document: lilyDocument)
 
         let pdfs = result.pdfs.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -663,6 +677,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         if !result.cancelled && engraveModel.errorCount > 0 {
             engraveModel.selectedTab = .issues
             setLogVisible(true)
+        }
+    }
+
+    /// The files a run read, whose issue markers it replaces: each target and
+    /// what it includes, or every project file for a build command.
+    private func filesRead(by run: EngraveRun) -> Set<String> {
+        if run.commandName != nil, let project = run.project {
+            return Set(Self.sourceFiles(in: project.files).map(\.path))
+        }
+        let project = projectModel.project
+        return run.jobs.reduce(into: Set<String>()) { paths, job in
+            paths.insert(job.source.path)
+            if let project { paths.formUnion(project.includedPaths(of: job.source)) }
         }
     }
 

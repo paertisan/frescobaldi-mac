@@ -169,6 +169,22 @@ import Testing
         #expect(found.pdfs.map(\.lastPathComponent) == ["flute.pdf"])
     }
 
+    /// What an engrave of each target reads, for its issue markers.
+    @Test func includedPathsOfEachTarget() throws {
+        let root = try makeProject()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let project = LilyPondProject.open(root.appendingPathComponent("score.ly"))
+        func names(_ paths: Set<String>) -> Set<String> {
+            Set(paths.map { LilyPondProject.relativePath(URL(fileURLWithPath: $0), to: root) })
+        }
+        // house.ily is in ../lib, which isn't an include path here.
+        #expect(names(project.includedPaths(of: root.appendingPathComponent("score.ly")))
+                == ["score.ly", "style.ily", "music/flute.ily"])
+        #expect(names(project.includedPaths(of: root.appendingPathComponent("parts/flute.ly")))
+                == ["parts/flute.ly", "style.ily", "music/flute.ily", "music/notes.ly"])
+        #expect(!names(project.includedPaths(of: root.appendingPathComponent("defs.ly"))).contains("style.ily"))
+    }
+
     @Test func brokenSettingsFileIsReported() throws {
         let root = try makeProject()
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }

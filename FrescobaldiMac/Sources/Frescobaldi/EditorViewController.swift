@@ -17,6 +17,11 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
     var onTextChange: (() -> Void)?
     /// Called when the insertion point moves.
     var onSelectionChange: ((NSRange) -> Void)?
+    /// The file whose issue markers this editor shows: the document's, or
+    /// the temporary copy an untitled document is engraved from.
+    var issuePath: () -> String? = { nil } {
+        didSet { refreshIssueMarkers() }
+    }
 
     init(document: LilyPondDocument) {
         self.document = document
@@ -70,6 +75,7 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         highlighter = SyntaxHighlighter(layoutManager: textView.layoutManager!, textStorage: document.textStorage)
         lines.rebuild(document.textStorage.string as NSString)
         ruler.updateThickness(lineCount: lines.lineCount)
+        refreshIssueMarkers()
 
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSTextStorage.didProcessEditingNotification,
@@ -86,6 +92,13 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         })
         observers.append(center.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.preferencesChanged() }
+        })
+        observers.append(center.addObserver(forName: IssueMarkerStore.didChange, object: nil, queue: nil) { [weak self] note in
+            let paths = note.userInfo?["paths"] as? Set<String>
+            MainActor.assumeIsolated {
+                guard let self, let path = self.issuePath(), paths?.contains(IssueMarkers.key(path)) ?? true else { return }
+                self.refreshIssueMarkers()
+            }
         })
         // Pin the editor below the toolbar (the safe area) instead of relying
         // on automatic scroll insets, which a transparent titlebar breaks
@@ -115,7 +128,15 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         let storage = document.textStorage
         guard storage.editedMask.contains(.editedCharacters) else { return }
         let edited = storage.editedRange
+        let oldLines = lines
         lines.rebuild(storage.string as NSString)
+        // Issue markers and messages move with the text (one editor per
+        // text storage reports it).
+        if !document.isLoading, let path = issuePath(), storage.layoutManagers.first === textView.layoutManager {
+            IssueMarkerStore.shared.edited(path, LineEdit(location: edited.location,
+                                                          oldLength: edited.length - storage.changeInLength,
+                                                          newLength: edited.length, old: oldLines, new: lines))
+        }
         if document.isLoading {
             highlighter.invalidateAll()
         } else {
@@ -214,18 +235,10 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         select(target)
     }
 
-    /// Ruler markers for the issues in this document's file.
-    func showIssues(_ messages: [LilyPondMessage], forPath path: String?) {
-        var markers: [Int: LilyPondMessage.Severity] = [:]
-        for message in messages where message.isLocated && (path == nil || normalized(message.file) == normalized(path!)) {
-            if let existing = markers[message.line], existing.isError { continue }
-            markers[message.line] = message.severity
-        }
-        ruler.issueMarkers = markers
-    }
-
-    private func normalized(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    /// Ruler markers for this file's issues from the last engrave that read it.
+    private func refreshIssueMarkers() {
+        guard ruler != nil else { return }
+        ruler.issueMarkers = issuePath().map { IssueMarkerStore.shared.lines(for: $0) } ?? [:]
     }
 
     /// The insertion point as LilyPond's line (1-based) and column (scalar).
