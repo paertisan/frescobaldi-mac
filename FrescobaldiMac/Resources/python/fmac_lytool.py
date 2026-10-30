@@ -28,6 +28,7 @@ def main():
     import ly.docinfo
     import ly.document
     import ly.indent
+    import ly.lex.lilypond
     import ly.pitch
 
     request = json.load(sys.stdin)
@@ -42,6 +43,15 @@ def main():
     # LilyPond 2.18+ reads the first pitch of \relative as absolute. Without a
     # \version statement, assume a current LilyPond.
     first_pitch_absolute = not version or version >= (2, 18)
+
+    def refuse_reset_relative_octave(name):
+        # python-ly reads the pitch after \resetRelativeOctave as a note, so
+        # the music after it would end up in the wrong octave.
+        selected = ly.document.Cursor(doc, cursor.start, cursor.end)
+        for t in ly.document.Source(selected, True):
+            if t == "\\resetRelativeOctave" and isinstance(t, ly.lex.lilypond.Command):
+                raise ValueError(name + " can't convert music that uses \\resetRelativeOctave: "
+                                 "the notes after it would end up in the wrong octave.")
 
     def indenter():
         i = ly.indent.Indenter()
@@ -74,9 +84,11 @@ def main():
                 ly.pitch.translate.insert_language(doc, target, version)
         elif command == "rel2abs":
             import ly.pitch.rel2abs
+            refuse_reset_relative_octave("Relative to Absolute")
             ly.pitch.rel2abs.rel2abs(cursor, language, first_pitch_absolute)
         elif command == "abs2rel":
             import ly.pitch.abs2rel
+            refuse_reset_relative_octave("Absolute to Relative")
             ly.pitch.abs2rel.abs2rel(cursor, language, True, first_pitch_absolute)
         elif command == "indent":
             indenter().indent(cursor)

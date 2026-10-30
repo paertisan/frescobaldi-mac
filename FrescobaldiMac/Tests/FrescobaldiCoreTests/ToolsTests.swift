@@ -49,6 +49,28 @@ private func pythonLyTool() -> PythonLyTool? {
         }
     }
 
+    /// python-ly reads `\resetRelativeOctave c''` as a note (upstream #930):
+    /// LilyPond reads the last d below as d'', python-ly wrote d'''.
+    @Test(.enabled(if: pythonLyTool() != nil, "python-ly not found; set PYTHON_LY_DIR"))
+    func refusesToConvertResetRelativeOctave() throws {
+        let tool = try #require(pythonLyTool())
+        let relative = "\\relative c' { c4 d \\resetRelativeOctave c'' d }"
+        #expect(throws: PythonLyError.failed("Relative to Absolute can't convert music that uses "
+                                             + "\\resetRelativeOctave: the notes after it would end up in the wrong octave.")) {
+            try tool.apply(.relativeToAbsolute, to: relative)
+        }
+        #expect(throws: PythonLyError.self) {
+            try tool.apply(.absoluteToRelative, to: "{ c'4 d' \\resetRelativeOctave c'' d'' }")
+        }
+        // Outside the selection, or in a comment, it doesn't matter.
+        let text = "\\relative c' { c4 d } % \\resetRelativeOctave c''\n{ \\resetRelativeOctave c'' d }"
+        let selection = (text as NSString).range(of: "\\relative c' { c4 d } % \\resetRelativeOctave c''")
+        #expect(try tool.apply(.relativeToAbsolute, to: text, selection: selection).hasPrefix("{ c'4 d' } %"))
+        // Transposing it is right (LilyPond agrees).
+        #expect(try tool.apply(.transpose(from: "c", to: "g"), to: "\\relative c' { c4 b' \\resetRelativeOctave c d }")
+                == "\\relative c'' { g4 fis' \\resetRelativeOctave g a }")
+    }
+
     @Test func scalarOffsets() {
         let text = "a🎵b" as NSString
         #expect(PythonLyTool.scalarOffset(ofUTF16: 0, in: text) == 0)
