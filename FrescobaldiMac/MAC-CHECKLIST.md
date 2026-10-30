@@ -14,7 +14,7 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
-PYTHON_LY_DIR=build/python swift test   # 67 tests, python-ly ones included
+PYTHON_LY_DIR=build/python swift test   # 68 tests, python-ly ones included
 ```
 
 The app compiled on the first try. None of the expected problems below
@@ -49,6 +49,9 @@ checked by launching with `--args -NSRequiresAquaSystemAppearance YES`.
       (⌘/ was checked from the Format menu: the test tool sends ⌘/ with an
       empty character string, which no app can match.)
 - [x] Find bar: ⌘F, ⌥⌘F (replace), ⌘G / ⇧⌘G, ⌘E.
+- [x] Opening a document shows the PDF from an earlier run, and enables
+      Play for its MIDI, if they're at least as new as the source. A stale
+      PDF isn't shown.
 - [x] ⌘R engraves: an edited titled document is saved first (the edited dot
       goes away), the status shows progress and then "Engraved in x s", and the
       PDF appears. Engrave again: the page and zoom stay put.
@@ -103,8 +106,6 @@ checked by launching with `--args -NSRequiresAquaSystemAppearance YES`.
 
 ## 4. Also noticed
 
-- Opening a document doesn't show its existing PDF; the preview stays empty
-  until you engrave.
 - On macOS 27 an untitled document can get a system-suggested name
   ("Frescobaldi Score — Suggested"). The temporary copy for engraving is
   named after it, which is harmless.

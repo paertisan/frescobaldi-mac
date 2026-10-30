@@ -98,6 +98,39 @@ private func pythonLyTool() -> PythonLyTool? {
         #expect(publish.arguments == ["-dno-point-and-click", "--pdf", "-o", "/tmp/out/b", "/a/b.ly"])
     }
 
+    @Test func existingOutputs() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("EngraveJob-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let now = Date()
+        func file(_ name: String, age: TimeInterval) throws {
+            let path = dir.appendingPathComponent(name).path
+            #expect(fm.createFile(atPath: path, contents: Data("x".utf8)))
+            try fm.setAttributes([.modificationDate: now.addingTimeInterval(-age)], ofItemAtPath: path)
+        }
+        try file("song.ly", age: 100)
+        for name in ["song-10.pdf", "song-2.pdf", "song.pdf", "song-part1.pdf", "song.midi", "song-1.mid"] {
+            try file(name, age: 50)
+        }
+        try file("song-draft.pdf", age: 50)   // doesn't end in a digit
+        try file("songbook.pdf", age: 50)     // another base name
+        try file("other.pdf", age: 50)
+        try file("song.log", age: 50)
+        try fm.createDirectory(at: dir.appendingPathComponent("song-3.pdf"), withIntermediateDirectories: true)
+
+        let source = dir.appendingPathComponent("song.ly")
+        var outputs = EngraveJob.existingOutputs(for: source)
+        #expect(outputs.pdfs.map(\.lastPathComponent) == ["song.pdf", "song-2.pdf", "song-10.pdf", "song-part1.pdf"])
+        #expect(outputs.midis.map(\.lastPathComponent) == ["song.midi", "song-1.mid"])
+
+        // Output older than the source is stale.
+        try file("song.pdf", age: 200)
+        outputs = EngraveJob.existingOutputs(for: source)
+        #expect(outputs.pdfs.first?.lastPathComponent == "song-2.pdf")
+        #expect(EngraveJob.existingOutputs(for: dir.appendingPathComponent("missing.ly")).pdfs.isEmpty)
+    }
+
     @Test func environment() {
         let env = EngraveJob.environment(base: ["PATH": "/usr/bin:/bin", "LC_ALL": "de_DE.UTF-8", "LANG": "de_DE"])
         #expect(env["PATH"] == "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")

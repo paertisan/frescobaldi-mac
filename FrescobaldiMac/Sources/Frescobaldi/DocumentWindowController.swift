@@ -47,6 +47,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         buildLayout()
         buildToolbar()
         wireUp()
+        showExistingOutput()
         // Centered unless a saved frame is restored. Only one window can own
         // the autosave name; later ones cascade.
         window.center()
@@ -345,6 +346,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         if !result.cancelled && engraveModel.errorCount > 0 {
             engraveModel.selectedTab = .issues
             setLogVisible(true)
+        }
+    }
+
+    /// Shows the PDF from an earlier run, and enables Play for its MIDI, if
+    /// they're at least as new as the document (as Frescobaldi does).
+    private func showExistingOutput() {
+        guard let url = lilyDocument.fileURL else { return }
+        let outputs = EngraveJob.existingOutputs(for: url)
+        guard !outputs.pdfs.isEmpty || !outputs.midis.isEmpty else { return }
+        engravedSource = url
+        engraveModel.pdfs = outputs.pdfs
+        engraveModel.midis = outputs.midis
+        if let pdf = outputs.pdfs.first {
+            preview.loadViewIfNeeded()
+            preview.load(pdf)
         }
     }
 

@@ -169,3 +169,43 @@ public final class EngraveJob: @unchecked Sendable {
         }
     }
 }
+
+extension EngraveJob {
+    /// Output files an earlier run left next to `source`, if they're at least
+    /// as new as it. Same rule as Frescobaldi's resultfiles: `name.ext`, then
+    /// `name-*[0-9].ext` (several `\book` blocks give `name-1.pdf`,
+    /// `name-2.pdf`, …) in natural order.
+    public static func existingOutputs(for source: URL, fileManager: FileManager = .default)
+        -> (pdfs: [URL], midis: [URL]) {
+        let directory = source.deletingLastPathComponent()
+        let base = source.deletingPathExtension().lastPathComponent
+        func modified(_ path: String) -> Date? {
+            (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        }
+        guard let sourceDate = modified(source.path),
+              let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return ([], []) }
+
+        let matches = names.filter { name in
+            let stem = (name as NSString).deletingPathExtension
+            guard stem == base || (stem.hasPrefix(base + "-") && stem.last.map { ("0"..."9").contains($0) } == true)
+            else { return false }
+            var isDirectory: ObjCBool = false
+            let path = directory.appendingPathComponent(name).path
+            guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue,
+                  let date = modified(path) else { return false }
+            return date >= sourceDate
+        }
+        .sorted { a, b in
+            let aIsBase = (a as NSString).deletingPathExtension == base
+            let bIsBase = (b as NSString).deletingPathExtension == base
+            if aIsBase != bIsBase { return aIsBase }
+            return a.compare(b, options: [.numeric, .caseInsensitive]) == .orderedAscending
+        }
+        .map { directory.appendingPathComponent($0) }
+
+        func withExtensions(_ extensions: Set<String>) -> [URL] {
+            matches.filter { extensions.contains($0.pathExtension.lowercased()) }
+        }
+        return (withExtensions(["pdf"]), withExtensions(["mid", "midi"]))
+    }
+}
