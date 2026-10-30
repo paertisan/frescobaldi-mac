@@ -29,11 +29,14 @@ public enum FrescobaldiTools {
                     description: """
                         Run LilyPond on a .ly file (or on LilyPond source text) and report the errors and \
                         warnings with file, line, column and the source line, plus the PDF and MIDI files \
-                        written. Output goes next to the file (for text: a temporary folder). For a score \
-                        that is open in Frescobaldi, use engrave_document instead.
+                        written. An include file engraves the score that includes it (its master, or a \
+                        .ly in the project that includes it). A project's frescobaldi.json adds include \
+                        paths and an output folder; otherwise output goes next to the file (for text: a \
+                        temporary folder). For a score that is open in Frescobaldi, use engrave_document \
+                        instead.
                         """,
                     inputSchema: schema([
-                        "path": string("Path of the .ly file to engrave."),
+                        "path": string("Path of the .ly file to engrave, or of a file it includes."),
                         "text": string("LilyPond source to engrave instead of a file."),
                         "mode": string("`preview` (default) adds point-and-click links; `publish` leaves them out.",
                                        oneOf: ["preview", "publish"]),
@@ -270,7 +273,19 @@ private struct Context: Sendable {
             throw MCPToolError("LilyPond wasn't found. Install it (brew install lilypond) or set its location in Frescobaldi's Settings.")
         }
         let mode: EngraveJob.Mode = arguments["mode"]?.string == "publish" ? .publish : .preview
-        let job = EngraveJob(lilypond: lilypond, source: source, mode: mode)
+        var target = source
+        var options: (outputBase: URL?, arguments: [String]) = (nil, [])
+        if arguments["path"] != nil {
+            // As ⌘R in the app: the file's target, with the project's settings.
+            let project = try await blocking { LilyPondProject.open(source) }
+            guard let found = project.target else {
+                throw MCPToolError("\(source.lastPathComponent) makes no output by itself (no \\score, music or \\markup at top level), and no .ly file in \(project.root.path) includes it.")
+            }
+            target = found
+            options = project.engraveOptions(for: found)
+        }
+        let job = EngraveJob(lilypond: lilypond, source: target, outputBase: options.outputBase, mode: mode,
+                             extraArguments: options.arguments)
         let result: EngraveJob.Result = try await withCheckedThrowingContinuation { continuation in
             do {
                 try job.start(output: { _ in }, completion: { continuation.resume(returning: $0) })
@@ -279,7 +294,7 @@ private struct Context: Sendable {
             }
         }
         var report = EngraveReport.json(result).object ?? [:]
-        report["source"] = .string(source.path)
+        report["source"] = .string(target.path)
         return .json(.object(report))
     }
 
@@ -290,7 +305,10 @@ private struct Context: Sendable {
         if let url = try file(arguments) {
             if url.pathExtension.lowercased() == "pdf" {
                 pdf = url
-            } else if let found = EngraveJob.existingOutputs(for: url).pdfs.first {
+            } else if let found = EngraveJob.existingOutputs(
+                for: url, outputDirectory: ProjectSettings.root(containing: url.deletingLastPathComponent()).flatMap { root in
+                    (try? ProjectSettings.load(root: root))?.outputDirectory(root: root)
+                }).pdfs.first {
                 pdf = found
             } else {
                 throw MCPToolError("\(url.lastPathComponent) has no up-to-date PDF. Engrave it first.")

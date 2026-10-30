@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
+import FrescobaldiCore
 @testable import FrescobaldiMCP
 
 private let packageRoot = URL(fileURLWithPath: #filePath)
@@ -204,7 +205,8 @@ private func text(_ result: JSONValue) -> String {
         let fake = dir.appendingPathComponent("lilypond")
         try #"""
         #!/bin/sh
-        BASE="$4"; FILE="$5"
+        while [ $# -gt 2 ]; do shift; done
+        BASE="$1"; FILE="$2"
         printf '%s\n' "$FILE:2:3: warning: barcheck failed at: 1/2" "  c" "    d |" >&2
         printf '%s\n' "Converting to \`$BASE.pdf'..." >&2
         printf '%%PDF-1.4\n' > "$BASE.pdf"
@@ -222,6 +224,21 @@ private func text(_ result: JSONValue) -> String {
         #expect(noInput["isError"] == true && text(noInput).contains("path"))
         let noFile = try await call(server(environment(lilypond: fake)), "engrave", ["path": "/nonexistent.ly"])
         #expect(noFile["isError"] == true)
+
+        // An include file engraves its score, into the project's output folder.
+        let project = dir.appendingPathComponent("Song")
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("music"), withIntermediateDirectories: true)
+        try Data("\\include \"music/a.ily\"\n\\score { \\a }".utf8).write(to: project.appendingPathComponent("song.ly"))
+        try Data("a = { c }".utf8).write(to: project.appendingPathComponent("music/a.ily"))
+        try Data("b = { c }".utf8).write(to: project.appendingPathComponent("music/b.ily"))
+        try ProjectSettings(outputDirectory: "build").write(root: project)
+        let part = try JSONValue.parse(text(try await call(server(environment(lilypond: fake)), "engrave",
+                                                           ["path": .string(project.appendingPathComponent("music/a.ily").path)])))
+        #expect(part["source"]?.string?.hasSuffix("Song/song.ly") == true)
+        #expect(part["pdfs"]?.array?.first?.string?.hasSuffix("Song/build/song.pdf") == true)
+        let unused = try await call(server(environment(lilypond: fake)), "engrave",
+                                    ["path": .string(project.appendingPathComponent("music/b.ily").path)])
+        #expect(unused["isError"] == true && text(unused).contains("makes no output by itself"))
     }
 
     @Test func transformText() async throws {
