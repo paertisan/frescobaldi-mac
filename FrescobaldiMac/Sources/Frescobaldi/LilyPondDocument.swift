@@ -114,6 +114,6 @@ enum EditorStyle {
     static var font: NSFont { Preferences.editorFont }
 
     static var baseAttributes: [NSAttributedString.Key: Any] {
-        [.font: font, .foregroundColor: NSColor.textColor]
+        [.font: font, .foregroundColor: EditorTheme.current.foreground]
     }
 }

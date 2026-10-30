@@ -58,7 +58,7 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
+        applyThemeToScrollView()
         scrollView.contentView.postsBoundsChangedNotifications = true
 
         ruler = LineNumberRuler(textView: textView, scrollView: scrollView)
@@ -145,8 +145,17 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
+    private func applyThemeToScrollView() {
+        let theme = EditorTheme.current
+        scrollView.backgroundColor = theme.background
+        // Dark scrollers and find bar on a dark editor, also in a light window.
+        scrollView.appearance = theme.isDark ? NSAppearance(named: .darkAqua) : nil
+    }
+
     private func preferencesChanged() {
-        textView.applyFont()
+        textView.applyStyle()
+        applyThemeToScrollView()
+        highlighter.invalidateAll()
         scrollView.rulersVisible = Preferences.showLineNumbers
         ruler.updateThickness(lineCount: lines.lineCount)
         scheduleHighlight()
@@ -156,6 +165,8 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
 
     func textViewDidChangeSelection(_ notification: Notification) {
         ruler.needsDisplay = true
+        // The current-line highlight moves with the insertion point.
+        if EditorTheme.current.currentLine != nil { textView.needsDisplay = true }
         onSelectionChange?(textView.selectedRange())
     }
 

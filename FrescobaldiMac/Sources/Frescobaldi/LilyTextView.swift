@@ -30,20 +30,48 @@ final class LilyTextView: NSTextView {
         allowsCharacterPickerTouchBarItem = false
         usesFontPanel = false
         drawsBackground = true
-        backgroundColor = .textBackgroundColor
-        insertionPointColor = .controlAccentColor
         textContainerInset = NSSize(width: 4, height: 6)
-        applyFont()
+        applyStyle()
     }
 
-    func applyFont() {
+    /// Font and theme colors. Call again when the settings change.
+    func applyStyle() {
+        let theme = EditorTheme.current
         font = EditorStyle.font
+        backgroundColor = theme.background
+        insertionPointColor = theme.insertionPoint
+        selectedTextAttributes = [.backgroundColor: theme.selection]
         typingAttributes = EditorStyle.baseAttributes
         if let storage = textStorage, storage.length > 0 {
+            let all = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
-            storage.addAttribute(.font, value: EditorStyle.font, range: NSRange(location: 0, length: storage.length))
+            storage.addAttribute(.font, value: EditorStyle.font, range: all)
+            storage.addAttribute(.foregroundColor, value: theme.foreground, range: all)
             storage.endEditing()
         }
+        needsDisplay = true
+    }
+
+    /// Highlights the line with the insertion point, if the theme does.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let color = EditorTheme.current.currentLine, selectedRange().length == 0,
+              let layoutManager else { return }
+        let length = nsString.length
+        let location = selectedRange().location
+        var line: NSRect
+        if length == 0 || (location >= length && layoutManager.extraLineFragmentTextContainer != nil) {
+            line = layoutManager.extraLineFragmentRect
+        } else {
+            let glyph = layoutManager.glyphIndexForCharacter(at: min(location, length - 1))
+            line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        }
+        guard line.height > 0 else { return }
+        line.origin.x = 0
+        line.origin.y += textContainerOrigin.y
+        line.size.width = bounds.width
+        color.setFill()
+        line.intersection(rect).fill()
     }
 
     /// One undoable replacement, selecting `selection` afterwards.

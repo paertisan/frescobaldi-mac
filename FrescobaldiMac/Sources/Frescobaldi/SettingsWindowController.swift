@@ -154,13 +154,26 @@ private struct ArchitectureBadge: View {
 }
 
 struct EditorSettingsView: View {
+    @AppStorage(Preferences.Key.editorFontName) private var fontName = Preferences.defaultFontName
     @AppStorage(Preferences.Key.editorFontSize) private var fontSize = 13.0
+    @AppStorage(Preferences.Key.editorTheme) private var theme = EditorTheme.Name.monokai.rawValue
     @AppStorage(Preferences.Key.indentWidth) private var indentWidth = 2
     @AppStorage(Preferences.Key.showLineNumbers) private var showLineNumbers = true
+    @State private var families: [String] = []
 
     var body: some View {
         Form {
             Section("Text") {
+                Picker("Font", selection: $fontName) {
+                    Text("System Monospaced").tag("")
+                    if !fontName.isEmpty && !families.contains(fontName) {
+                        Text("\(fontName) (not installed)").tag(fontName)
+                    }
+                    ForEach(families, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Theme", selection: $theme) {
+                    ForEach(EditorTheme.Name.allCases) { Text($0.title).tag($0.rawValue) }
+                }
                 LabeledContent("Font size") {
                     Text("\(Int(fontSize)) pt").monospacedDigit()
                     Stepper("Font size", value: $fontSize, in: 8...36, step: 1).labelsHidden()
@@ -173,6 +186,9 @@ struct EditorSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { families = Preferences.monospacedFontFamilies() }
+        .onChange(of: fontName) { notify() }
+        .onChange(of: theme) { notify() }
         .onChange(of: fontSize) { notify() }
         .onChange(of: indentWidth) { notify() }
         .onChange(of: showLineNumbers) { notify() }

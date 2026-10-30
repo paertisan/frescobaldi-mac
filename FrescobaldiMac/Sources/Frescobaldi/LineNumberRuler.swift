@@ -56,9 +56,10 @@ final class LineNumberRuler: NSRulerView {
         let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         let originY = textView.textContainerOrigin.y
-        let attributes: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: NSColor.secondaryLabelColor]
+        let theme = EditorTheme.current
+        let attributes: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: theme.gutterText]
         let currentLine = index.line(at: textView.selectedRange().location)
-        let currentAttributes: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: NSColor.labelColor]
+        let currentAttributes: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: theme.gutterCurrentText]
 
         func drawNumber(_ line: Int, fragment: NSRect) {
             let y = convert(NSPoint(x: 0, y: fragment.minY + originY), from: textView).y

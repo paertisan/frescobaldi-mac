@@ -11,7 +11,13 @@ enum Preferences {
         static let indentWidth = "indentWidth"
         static let showLineNumbers = "showLineNumbers"
         static let claudeAccess = "claudeAccess"
+        static let editorFontName = "editorFontName"
+        static let editorTheme = "editorTheme"
     }
+
+    /// Cascadia Code if it's installed (it has coding ligatures; Cascadia Mono
+    /// doesn't), otherwise the system's monospaced font.
+    static let defaultFontName = "Cascadia Code"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -21,6 +27,8 @@ enum Preferences {
             Key.indentWidth: 2,
             Key.showLineNumbers: true,
             Key.claudeAccess: true,
+            Key.editorFontName: defaultFontName,
+            Key.editorTheme: EditorTheme.Name.monokai.rawValue,
         ])
     }
 
@@ -31,9 +39,32 @@ enum Preferences {
     /// Let frescobaldi-mcp (Claude) read and edit open documents.
     static var claudeAccess: Bool { UserDefaults.standard.bool(forKey: Key.claudeAccess) }
 
+    static var editorTheme: EditorTheme.Name {
+        EditorTheme.Name(rawValue: UserDefaults.standard.string(forKey: Key.editorTheme) ?? "") ?? .monokai
+    }
+
+    /// The editor font family ("" = the system's monospaced font).
+    static var editorFontName: String { UserDefaults.standard.string(forKey: Key.editorFontName) ?? "" }
+
     static var editorFont: NSFont {
-        let size = UserDefaults.standard.double(forKey: Key.editorFontSize)
-        return NSFont.monospacedSystemFont(ofSize: CGFloat(size > 4 ? size : 13), weight: .regular)
+        let stored = UserDefaults.standard.double(forKey: Key.editorFontSize)
+        let size = CGFloat(stored > 4 ? stored : 13)
+        let family = editorFontName
+        if !family.isEmpty,
+           let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) {
+            return font
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// Installed fixed-pitch font families, for the font setting.
+    static func monospacedFontFamilies() -> [String] {
+        NSFontManager.shared.availableFontFamilies.filter { family in
+            guard !family.hasPrefix("."),
+                  let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 13)
+            else { return false }
+            return font.isFixedPitch || font.fontDescriptor.symbolicTraits.contains(.monoSpace)
+        }
     }
 
     /// The LilyPond executable from the setting or the standard locations.
