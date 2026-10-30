@@ -3,39 +3,83 @@ import Combine
 import FrescobaldiCore
 import SwiftUI
 
+/// What ⌘R engraves in a project, chosen in the toolbar's target menu and
+/// remembered per project folder (on this computer, not in the project).
+enum TargetChoice: Equatable {
+    /// The current file's own target: itself, its master, or what includes it.
+    case automatic
+    case file(String)
+    case all
+    /// A build command from frescobaldi.json, by name.
+    case command(String)
+
+    init(storage: String) {
+        if storage == "all" { self = .all }
+        else if storage.hasPrefix("file:") { self = .file(String(storage.dropFirst(5))) }
+        else if storage.hasPrefix("command:") { self = .command(String(storage.dropFirst(8))) }
+        else { self = .automatic }
+    }
+
+    var storage: String {
+        switch self {
+        case .automatic: "automatic"
+        case let .file(path): "file:\(path)"
+        case .all: "all"
+        case let .command(name): "command:\(name)"
+        }
+    }
+}
+
 /// The project of the document in a window: its main file, the include
-/// tree, the project folder and suggestions for organizing it.
+/// tree, the project folder, its targets and suggestions for organizing it.
 final class ProjectModel: ObservableObject {
     @Published private(set) var project: LilyPondProject?
-    /// The file to engrave for this window's document.
-    @Published private(set) var mainURL: URL?
     /// The window's own file, to mark it in the lists.
     @Published private(set) var currentPath: String?
     /// Expanded rows (include nodes and folders), kept across refreshes.
     @Published var expanded: Set<String> = []
+    /// What ⌘R engraves, for this project folder.
+    @Published private(set) var choice: TargetChoice = .automatic
 
     /// Set by the window: open a file, at a line if given.
     var onOpen: ((URL, Int?) -> Void)?
     /// Called on the main queue after each refresh.
     var onLoaded: ((LilyPondProject) -> Void)?
+    /// Set by the window: engrave a target, or run a command, now.
+    var onEngrave: ((TargetChoice) -> Void)?
+    /// Set by the window: open the project settings.
+    var onShowSettings: (() -> Void)?
 
     private var generation = 0
+    /// No refresh is on its way, so `project` matches the open documents.
+    private(set) var isUpToDate = false
     private let queue = DispatchQueue(label: "ProjectModel", qos: .utility)
+    private var cancellables: Set<AnyCancellable> = []
+
+    static let choiceDidChange = Notification.Name("ProjectModelChoiceDidChange")
+    private static let choicesKey = "projectTargetChoices"
+
+    init() {
+        // Another window of the same project chose a target.
+        NotificationCenter.default.publisher(for: Self.choiceDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] note in
+                guard let self, note.object as AnyObject? !== self, let root = note.userInfo?["root"] as? String,
+                      root == self.project.map({ LilyPondProject.normalized($0.root) }) else { return }
+                self.choice = Self.storedChoice(root: root)
+            }
+            .store(in: &cancellables)
+    }
 
     /// LilyPond's own `ly` folder, for includes such as english.ly.
     static var systemDirectories: [URL] {
         Preferences.lilypond().map { LilyPondLocator.includeDirectories(of: $0) } ?? []
     }
 
-    /// Rebuilds the project in the background. Open documents' unsaved text
-    /// counts instead of the file on disk.
-    func refresh(document: LilyPondDocument) {
-        guard let url = document.fileURL else {
-            project = nil
-            mainURL = nil
-            currentPath = nil
-            return
-        }
+    /// Builds the project for `document` from the open documents' text
+    /// (unsaved changes count) or the disk. Safe off the main thread.
+    private static func loader(for document: LilyPondDocument) -> (() -> LilyPondProject)? {
+        guard let url = document.fileURL else { return nil }
         var texts: [String: String] = [:]
         for case let open as LilyPondDocument in NSDocumentController.shared.documents {
             if let openURL = open.fileURL { texts[LilyPondProject.normalized(openURL)] = open.text }
@@ -43,24 +87,98 @@ final class ProjectModel: ObservableObject {
         let openTexts = texts
         let text = document.text
         let systemDirectories = Self.systemDirectories
-        generation += 1
-        let generation = generation
-        let current = LilyPondProject.normalized(url)
-        queue.async { [weak self] in
+        return {
             let read: LilyPondProject.Reader = { file in
                 openTexts[LilyPondProject.normalized(file)] ?? LilyPondProject.diskReader(file)
             }
-            let main = LilyPondProject.main(for: url, text: text, read: read)
-            let project = LilyPondProject.load(main: main, systemDirectories: systemDirectories, read: read)
+            return LilyPondProject.open(url, text: text, systemDirectories: systemDirectories, read: read)
+        }
+    }
+
+    /// Rebuilds the project in the background.
+    func refresh(document: LilyPondDocument) {
+        generation += 1
+        guard let load = Self.loader(for: document) else {
+            project = nil
+            currentPath = nil
+            isUpToDate = true
+            return
+        }
+        isUpToDate = false
+        let generation = generation
+        queue.async { [weak self] in
+            let project = load()
             DispatchQueue.main.async {
                 guard let self, generation == self.generation else { return }
-                if self.project?.main != project.main { self.expanded = [project.tree.id] }
-                self.project = project
-                self.mainURL = main
-                self.currentPath = current
-                self.onLoaded?(project)
+                self.apply(project)
             }
         }
+    }
+
+    /// The project as it is now, loading it right away if a refresh is
+    /// still on its way (as when ⌘R follows an edit).
+    func currentProject(for document: LilyPondDocument) -> LilyPondProject? {
+        if isUpToDate { return project }
+        guard let load = Self.loader(for: document) else { return nil }
+        generation += 1
+        apply(load())
+        return project
+    }
+
+    private func apply(_ project: LilyPondProject) {
+        if self.project?.main != project.main { expanded = [project.tree.id] }
+        let root = LilyPondProject.normalized(project.root)
+        if self.project.map({ LilyPondProject.normalized($0.root) }) != root {
+            choice = Self.storedChoice(root: root)
+        }
+        self.project = project
+        currentPath = LilyPondProject.normalized(project.file)
+        isUpToDate = true
+        onLoaded?(project)
+    }
+
+    // MARK: Targets
+
+    private static func storedChoice(root: String) -> TargetChoice {
+        let choices = UserDefaults.standard.dictionary(forKey: choicesKey) as? [String: String] ?? [:]
+        return TargetChoice(storage: choices[root] ?? "automatic")
+    }
+
+    /// Remembers the choice for the project and tells its other windows.
+    func choose(_ choice: TargetChoice) {
+        guard let project else { return }
+        let root = LilyPondProject.normalized(project.root)
+        var choices = UserDefaults.standard.dictionary(forKey: Self.choicesKey) as? [String: String] ?? [:]
+        if choice == .automatic { choices.removeValue(forKey: root) } else { choices[root] = choice.storage }
+        UserDefaults.standard.set(choices, forKey: Self.choicesKey)
+        self.choice = choice
+        NotificationCenter.default.post(name: Self.choiceDidChange, object: self, userInfo: ["root": root])
+    }
+
+    /// The files `choice` engraves in `project`. A chosen file that's gone
+    /// falls back to the automatic target.
+    static func targets(for choice: TargetChoice, in project: LilyPondProject) -> [URL] {
+        switch choice {
+        case .automatic, .command:
+            return project.target.map { [$0] } ?? []
+        case let .file(path):
+            let url = ProjectSettings.url(path, root: project.root)
+            guard FileManager.default.fileExists(atPath: url.path) else { return project.target.map { [$0] } ?? [] }
+            return [url]
+        case .all:
+            return project.targets
+        }
+    }
+
+    /// The command `choice` names, if it still exists.
+    static func command(for choice: TargetChoice, in project: LilyPondProject) -> ProjectCommand? {
+        guard case let .command(name) = choice else { return nil }
+        return project.commands.first { $0.name == name }
+    }
+
+    /// What the current choice engraves, for display.
+    var effectiveTargets: [URL] {
+        project.map { Self.targets(for: choice, in: $0) } ?? []
     }
 
     func open(_ url: URL?, line: Int? = nil) {
@@ -117,6 +235,19 @@ struct ProjectNavigatorView: View {
                         }
                     }
                 }
+                Section {
+                    TargetsSection(project: project, model: model)
+                } header: {
+                    HStack {
+                        Text("Targets")
+                        Spacer()
+                        Button { model.onShowSettings?() } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Project Settings…")
+                    }
+                }
                 Section("Includes") {
                     IncludeTreeRow(node: project.tree, project: project, model: model)
                 }
@@ -133,6 +264,118 @@ struct ProjectNavigatorView: View {
                                    description: Text("Save the document to see its includes and folder."))
                 .frame(maxHeight: .infinity)
         }
+    }
+}
+
+/// The files to engrave, All Targets and the build commands, each with a
+/// button that runs it now. The ones ⌘R runs are highlighted.
+private struct TargetsSection: View {
+    let project: LilyPondProject
+    @ObservedObject var model: ProjectModel
+
+    var body: some View {
+        let active = Set(model.effectiveTargets.map(LilyPondProject.normalized))
+        let defaultTarget = project.settings?.defaultTarget.map {
+            LilyPondProject.normalized(ProjectSettings.url($0, root: project.root))
+        }
+        if project.targets.isEmpty {
+            Text("No file here makes output by itself.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        // Targets at the top of the project, then one collapsible group per
+        // folder (parts/...), so many parts don't push the includes away.
+        let groups = Dictionary(grouping: project.targets) { target -> String in
+            let path = project.relativePath(target)
+            return path.contains("/") ? (path as NSString).deletingLastPathComponent : ""
+        }
+        let folders = groups.keys.filter { !$0.isEmpty }.sorted {
+            $0.compare($1, options: [.numeric, .caseInsensitive]) == .orderedAscending
+        }
+        let row = { (target: URL, title: String) in
+            let path = LilyPondProject.normalized(target)
+            return TargetRow(title: title, symbol: "music.note",
+                             isActive: model.choice != .all && !model.choice.isCommand && active.contains(path),
+                             badge: path == defaultTarget ? "default" : nil,
+                             help: target.path, open: { model.open(target) },
+                             run: { model.onEngrave?(.file(project.relativePath(target))) })
+        }
+        ForEach(groups[""] ?? [], id: \.self) { target in
+            row(target, project.relativePath(target))
+        }
+        ForEach(folders, id: \.self) { folder in
+            let targets = groups[folder] ?? []
+            DisclosureGroup(isExpanded: model.binding(for: "targets:\(folder)")) {
+                ForEach(targets, id: \.self) { target in
+                    row(target, target.lastPathComponent)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 16)
+                    Text(folder)
+                        .fontWeight(targets.contains { active.contains(LilyPondProject.normalized($0)) }
+                                    && model.choice != .all && !model.choice.isCommand ? .semibold : .regular)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Badge("\(targets.count)")
+                }
+            }
+        }
+        if project.targets.count > 1 {
+            TargetRow(title: "All Targets", symbol: "square.stack", isActive: model.choice == .all, badge: nil,
+                      help: "Engrave all \(project.targets.count) targets", open: nil, runVerb: "Engrave",
+                      run: { model.onEngrave?(.all) })
+        }
+        ForEach(project.commands) { command in
+            TargetRow(title: command.name, symbol: "terminal", isActive: model.choice == .command(command.name),
+                      badge: nil, help: command.command, open: nil, runVerb: "Run",
+                      run: { model.onEngrave?(.command(command.name)) })
+        }
+    }
+}
+
+private struct TargetRow: View {
+    let title: String
+    let symbol: String
+    let isActive: Bool
+    let badge: String?
+    let help: String
+    let open: (() -> Void)?
+    var runVerb = "Engrave"
+    let run: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                .frame(width: 16)
+            Text(title)
+                .fontWeight(isActive ? .semibold : .regular)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            if let badge { Badge(badge) }
+            Button(action: run) {
+                Image(systemName: "play.fill")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("\(runVerb) \(title)")
+            .accessibilityLabel("\(runVerb) \(title)")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { open?() }
+        .help(help)
+    }
+}
+
+extension TargetChoice {
+    var isCommand: Bool {
+        if case .command = self { return true }
+        return false
     }
 }
 
@@ -156,7 +399,8 @@ private struct IncludeTreeRow: View {
         }
     }
 
-    private var isMain: Bool { node.line == 0 }
+    /// The root of the tree is what ⌘R engraves, unless nothing is.
+    private var isMain: Bool { node.line == 0 && project.target != nil }
     private var isCurrent: Bool { node.url.map { LilyPondProject.normalized($0) == model.currentPath } ?? false }
 
     private var row: some View {
@@ -247,7 +491,7 @@ private struct FileTreeRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
-            if path == LilyPondProject.normalized(project.main) { Badge("main") }
+            if project.target != nil && path == LilyPondProject.normalized(project.main) { Badge("main") }
         }
         .opacity(isUnused || !(isSource || file.isDirectory) ? 0.55 : 1)
         .contentShape(Rectangle())

@@ -24,15 +24,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private var sidebarItem: NSSplitViewItem!
     private var logItem: NSSplitViewItem!
     private var previewItem: NSSplitViewItem!
-    private var job: EngraveJob?
-    /// The file LilyPond last engraved (the document, or a temp copy if untitled).
+    private var run: EngraveRun?
+    /// The file whose PDF the preview shows (the document, its target, or a
+    /// temp copy if untitled).
     private var engravedSource: URL?
+    private lazy var targetMenu = TargetMenuController(model: projectModel) { [weak self] in
+        self?.lilyDocument.displayName ?? ""
+    }
     private lazy var untitledDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("Frescobaldi-\(UUID().uuidString)", isDirectory: true)
     private var issueIndex = -1
     private var logWasShown = false
-    /// Waiting for a job to finish (Claude's engrave_document).
-    private var engraveCompletions: [ObjectIdentifier: [EngraveCompletion]] = [:]
     private var cancellables: Set<AnyCancellable> = []
 
     init(document: LilyPondDocument) {
@@ -117,10 +119,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             self.projectModel.refresh(document: self.lilyDocument)
         }
         projectModel.onOpen = { [weak self] url, line in self?.openProjectFile(url, line: line) }
+        projectModel.onEngrave = { [weak self] choice in self?.engrave(mode: .preview, choice: choice) }
+        projectModel.onShowSettings = { [weak self] in self?.showProjectSettings(nil) }
+        targetMenu.onShowSettings = { [weak self] in self?.showProjectSettings(nil) }
         projectModel.onLoaded = { [weak self] project in
-            guard let self, self.engraveModel.pdfs.isEmpty, self.engraveModel.status == .idle else { return }
-            self.showExistingOutput(for: project.main)
+            guard let self else { return }
+            self.targetMenu.update()
+            guard self.engraveModel.pdfs.isEmpty, self.engraveModel.status == .idle else { return }
+            let targets = ProjectModel.targets(for: self.projectModel.choice, in: project)
+            if let target = targets.first(where: { $0 == project.target }) ?? targets.first {
+                self.showExistingOutput(for: target, in: project)
+            }
         }
+        projectModel.$choice
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.targetMenu.update() } }
+            .store(in: &cancellables)
         projectModel.refresh(document: lilyDocument)
         editor.onSelectionChange = { [weak self] _ in self?.highlightCursorInPreview() }
         outlineModel.update(text: lilyDocument.textStorage.string as NSString)
@@ -167,7 +181,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     func windowWillClose(_ notification: Notification) {
-        job?.cancel()
+        run?.cancel()
         midiPlayer.stop()
         try? FileManager.default.removeItem(at: untitledDirectory)
     }
@@ -176,6 +190,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     private enum ToolbarID {
         static let engrave = NSToolbarItem.Identifier("engrave")
+        static let target = NSToolbarItem.Identifier("target")
         static let stop = NSToolbarItem.Identifier("stop")
         static let status = NSToolbarItem.Identifier("status")
         static let midi = NSToolbarItem.Identifier("midi")
@@ -185,7 +200,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     private func buildToolbar() {
-        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar")
+        // A new identifier, so saved layouts from before the target menu reset.
+        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar2")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true
@@ -195,7 +211,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, ToolbarID.engrave, ToolbarID.stop, .flexibleSpace,
+        [.toggleSidebar, .sidebarTrackingSeparator, ToolbarID.engrave, ToolbarID.stop, ToolbarID.target, .flexibleSpace,
          ToolbarID.status, .flexibleSpace, ToolbarID.midi, ToolbarID.log, ToolbarID.preview]
     }
 
@@ -230,6 +246,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             return button("Preview", "sidebar.right", #selector(togglePreview(_:)), "Show or Hide Preview (⌥⌘↩)")
         case ToolbarID.transpose:
             return button("Transpose", "arrow.up.arrow.down", #selector(transposePitches(_:)), "Transpose (⌃⌘T)")
+        case ToolbarID.target:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Target"
+            item.paletteLabel = "Engrave Target"
+            item.toolTip = "What ⌘R engraves"
+            item.view = targetMenu.button
+            item.visibilityPriority = .high
+            return item
         case ToolbarID.status:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Status"
@@ -275,6 +299,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         case #selector(togglePreview(_:)):
             item.title = previewItem.isCollapsed ? "Show Preview" : "Hide Preview"
             return true
+        case #selector(engraveAllTargets(_:)):
+            return (projectModel.project?.targets.count ?? 0) > 1
+        case #selector(showProjectSettings(_:)):
+            return lilyDocument.fileURL != nil
         case #selector(nextIssue(_:)), #selector(previousIssue(_:)):
             return !engraveModel.messages.isEmpty
         case #selector(zoomInPreview(_:)), #selector(zoomOutPreview(_:)), #selector(zoomToFitPreview(_:)):
@@ -288,69 +316,123 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     @objc func engravePreview(_ sender: Any?) { engrave(mode: .preview) }
     @objc func engravePublish(_ sender: Any?) { engrave(mode: .publish) }
+    @objc func engraveAllTargets(_ sender: Any?) { engrave(mode: .preview, choice: .all) }
 
     @objc func stopEngraving(_ sender: Any?) {
-        job?.cancel()
+        run?.cancel()
     }
 
     typealias EngraveCompletion = (Result<EngraveJob.Result, Error>) -> Void
 
-    /// Engraves the document. With a completion (requests from Claude),
-    /// problems are reported to it instead of in alerts.
-    func engrave(mode: EngraveJob.Mode, saveFirst: Bool = true, completion: EngraveCompletion? = nil) {
-        job?.cancel()
-        guard let lilypond = Preferences.lilypond() else {
-            engraveModel.status = .failed("LilyPond not found")
-            if let completion {
-                completion(.failure(BridgeError("LilyPond wasn't found. Install it (brew install lilypond) or set its location in Frescobaldi's Settings.")))
-            } else {
-                showLilyPondMissingAlert()
-            }
-            return
-        }
+    /// Engraves what the target menu says (or `choice`): the document's
+    /// target, a chosen one, all of them, or a build command. With a
+    /// completion (requests from Claude), problems are reported to it
+    /// instead of in alerts, and the document's own target is engraved
+    /// rather than all targets or a command.
+    func engrave(mode: EngraveJob.Mode, saveFirst: Bool = true, choice requested: TargetChoice? = nil,
+                 completion: EngraveCompletion? = nil) {
+        run?.cancel()
         func fail(_ error: Error) {
             if let completion { completion(.failure(error)) } else { presentError(error) }
         }
-        if let url = lilyDocument.fileURL {
-            // A file of a larger project engraves the project's main file: its
-            // master variable, or the .ly that includes it.
-            let target = projectModel.mainURL ?? LilyPondProject.main(for: url, text: lilyDocument.text)
-            let isSelf = LilyPondProject.normalized(target) == LilyPondProject.normalized(url)
-            engraveModel.targetName = isSelf ? nil : target.lastPathComponent
-            // LilyPond reads the included files from disk, so save them all.
-            save(saveFirst ? editedProjectDocuments(target: target) : []) { [weak self] error in
-                guard let self else { return }
-                if let error {
-                    fail(error)
-                    return
-                }
-                self.run(lilypond: lilypond, source: target, mode: mode, completion: completion)
-            }
-        } else {
-            engraveModel.targetName = nil
+        guard lilyDocument.fileURL != nil, let project = projectModel.currentProject(for: lilyDocument) else {
             // Untitled: engrave a temporary copy.
+            guard let lilypond = requireLilyPond(completion) else { return }
+            engraveModel.targetName = nil
             do {
                 try FileManager.default.createDirectory(at: untitledDirectory, withIntermediateDirectories: true)
                 let name = lilyDocument.displayName.replacingOccurrences(of: "/", with: "-")
                 let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
                 try Data(lilyDocument.text.utf8).write(to: source)
-                run(lilypond: lilypond, source: source, mode: mode, completion: completion)
+                start(EngraveRun(jobs: [EngraveJob(lilypond: lilypond, source: source, mode: mode)], names: [name]),
+                      mode: mode, completion: completion)
             } catch {
                 fail(error)
             }
+            return
+        }
+        var choice = requested ?? projectModel.choice
+        if completion != nil && requested == nil && (choice == .all || choice.isCommand) { choice = .automatic }
+        if let command = ProjectModel.command(for: choice, in: project) {
+            runCommand(command, in: project, saveFirst: saveFirst)
+            return
+        }
+        let targets = ProjectModel.targets(for: choice, in: project)
+        guard !targets.isEmpty else {
+            engraveModel.status = .failed("Nothing to engrave")
+            if let completion {
+                completion(.failure(BridgeError(nothingToEngraveMessage(project))))
+            } else {
+                showNothingToEngrave(project)
+            }
+            return
+        }
+        guard let lilypond = requireLilyPond(completion) else { return }
+        let jobs = targets.map { target in
+            let options = project.engraveOptions(for: target)
+            return EngraveJob(lilypond: lilypond, source: target, outputBase: options.outputBase, mode: mode,
+                              extraArguments: options.arguments)
+        }
+        let names = targets.map { project.relativePath($0) }
+        let current = project.target.map(LilyPondProject.normalized)
+        let preferred = targets.firstIndex { LilyPondProject.normalized($0) == current } ?? 0
+        let isSelf = targets.count == 1 && LilyPondProject.normalized(targets[0]) == LilyPondProject.normalized(project.file)
+        engraveModel.targetName = isSelf || targets.count > 1 ? nil : names[0]
+        // LilyPond reads the included files from disk, so save them all.
+        save(saveFirst ? editedProjectDocuments(in: project) : []) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                fail(error)
+                return
+            }
+            self.start(EngraveRun(jobs: jobs, names: names, preferred: preferred), mode: mode, completion: completion)
+        }
+    }
+
+    private func requireLilyPond(_ completion: EngraveCompletion?) -> URL? {
+        if let lilypond = Preferences.lilypond() { return lilypond }
+        engraveModel.status = .failed("LilyPond not found")
+        if let completion {
+            completion(.failure(BridgeError("LilyPond wasn't found. Install it (brew install lilypond) or set its location in Frescobaldi's Settings.")))
+        } else {
+            showLilyPondMissingAlert()
+        }
+        return nil
+    }
+
+    private func nothingToEngraveMessage(_ project: LilyPondProject) -> String {
+        "\(project.file.lastPathComponent) makes no output by itself (no \\score, music or \\markup at top level), and no target includes it."
+    }
+
+    /// ⌘R on an include file that nothing includes, or a .ly with only
+    /// definitions: say why, and offer the project's main target.
+    private func showNothingToEngrave(_ project: LilyPondProject) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Nothing to engrave"
+        alert.informativeText = nothingToEngraveMessage(project) + """
+             Include it from a .ly file, name the file to engrave with a master variable \
+            (% -*- master: score.ly;), or choose a target in the toolbar.
+            """
+        let fallback = project.settings?.defaultTarget.map { ProjectSettings.url($0, root: project.root) }
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } ?? project.targets.first
+        if let fallback { alert.addButton(withTitle: "Engrave \(fallback.lastPathComponent)") }
+        alert.addButton(withTitle: fallback == nil ? "OK" : "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let fallback, response == .alertFirstButtonReturn else { return }
+            self?.engrave(mode: .preview, choice: .file(project.relativePath(fallback)))
         }
     }
 
     /// This document and the other open files of its project that have
     /// unsaved changes.
-    private func editedProjectDocuments(target: URL) -> [LilyPondDocument] {
-        let project = projectModel.project.flatMap {
-            LilyPondProject.normalized($0.main) == LilyPondProject.normalized(target) ? $0 : nil
-        }
-        let included = project?.includedPaths ?? []
-        let root = LilyPondProject.normalized(target.deletingLastPathComponent()) + "/"
+    private func editedProjectDocuments(in project: LilyPondProject) -> [LilyPondDocument] {
+        let included = project.includedPaths
+        let root = LilyPondProject.normalized(project.root) + "/"
         return NSDocumentController.shared.documents.compactMap { $0 as? LilyPondDocument }.filter { document in
-            guard document.isDocumentEdited, let url = document.fileURL else { return false }
+            // An edit whose undo group is still open hasn't marked the document edited yet.
+            let edited = document.isDocumentEdited || (document.undoManager?.groupingLevel ?? 0) > 0
+            guard edited, let url = document.fileURL else { return false }
             if document === lilyDocument { return true }
             let path = LilyPondProject.normalized(url)
             return included.contains(path) || path.hasPrefix(root)
@@ -374,37 +456,173 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
     }
 
-    private func run(lilypond: URL, source: URL, mode: EngraveJob.Mode, completion: EngraveCompletion?) {
-        let job = EngraveJob(lilypond: lilypond, source: source, mode: mode)
-        self.job = job
-        engravedSource = source
-        engraveModel.status = .running(mode)
-        engraveModel.log = ""
-        if let completion { engraveCompletions[ObjectIdentifier(job), default: []].append(completion) }
-        do {
-            try job.start(output: { [weak self] text in
-                DispatchQueue.main.async {
-                    guard let self, self.job === job else { return }
-                    self.engraveModel.log += text
+    // MARK: Build commands
+
+    /// Commands from frescobaldi.json that the user agreed to run, per project.
+    private static let approvedCommandsKey = "approvedProjectCommands"
+
+    static func approve(_ command: ProjectCommand, root: URL) {
+        var approved = UserDefaults.standard.stringArray(forKey: approvedCommandsKey) ?? []
+        let key = "\(LilyPondProject.normalized(root))\u{0}\(command.command)"
+        if !approved.contains(key) { approved.append(key) }
+        UserDefaults.standard.set(approved, forKey: approvedCommandsKey)
+    }
+
+    private static func isApproved(_ command: ProjectCommand, root: URL) -> Bool {
+        let key = "\(LilyPondProject.normalized(root))\u{0}\(command.command)"
+        return (UserDefaults.standard.stringArray(forKey: approvedCommandsKey) ?? []).contains(key)
+    }
+
+    /// Runs a build command. A project file can come from anyone, so its
+    /// commands run only after the user has seen and allowed each one.
+    private func runCommand(_ command: ProjectCommand, in project: LilyPondProject, saveFirst: Bool) {
+        let directory = command.directory.map { ProjectSettings.url($0, root: project.root) } ?? project.root
+        let go = { [weak self] in
+            guard let self else { return }
+            self.engraveModel.targetName = nil
+            self.save(saveFirst ? self.editedProjectDocuments(in: project) : []) { error in
+                if let error {
+                    self.presentError(error)
+                    return
                 }
-            }, completion: { [weak self] result in
-                DispatchQueue.main.async { self?.finish(job, result) }
-            })
-        } catch {
-            self.job = nil
-            engraveModel.status = .failed("Couldn't start LilyPond: \(error.localizedDescription)")
-            engraveCompletions.removeValue(forKey: ObjectIdentifier(job))
-            completion?(.failure(BridgeError("Couldn't start LilyPond: \(error.localizedDescription)")))
+                let job = EngraveJob(command: command.command, directory: directory)
+                self.start(EngraveRun(jobs: [job], names: [command.name], commandName: command.name, project: project),
+                           mode: .preview, completion: nil)
+            }
+        }
+        if Self.isApproved(command, root: project.root) {
+            go()
+            return
+        }
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Run “\(command.name)”?"
+        alert.informativeText = """
+            \(ProjectSettings.fileName) in \(project.root.lastPathComponent) runs this in \(directory.path):
+
+            \(command.command)
+
+            Only run commands from projects you trust. Frescobaldi asks once per command.
+            """
+        alert.addButton(withTitle: "Run")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            Self.approve(command, root: project.root)
+            go()
         }
     }
 
-    private func finish(_ finishedJob: EngraveJob, _ result: EngraveJob.Result) {
-        // Whoever waits for this job gets its result, even if a newer one replaced it.
-        for completion in engraveCompletions.removeValue(forKey: ObjectIdentifier(finishedJob)) ?? [] {
-            completion(.success(result))
+    // MARK: Project settings
+
+    /// The Project Settings sheet; saving writes frescobaldi.json at the
+    /// project folder (only if something changed).
+    @objc func showProjectSettings(_ sender: Any?) {
+        guard let window, let project = projectModel.currentProject(for: lilyDocument) else {
+            NSSound.beep()
+            return
         }
-        guard finishedJob === job else { return }
-        job = nil
+        if let broken = project.problems.first(where: { $0.file == project.settingsURL && $0.severity == .error
+                                                        && $0.message.contains("couldn't be read") }) {
+            let alert = NSAlert()
+            alert.messageText = "\(ProjectSettings.fileName) can't be edited here"
+            alert.informativeText = broken.message + " Fix it in a text editor first."
+            alert.addButton(withTitle: "Open File")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn { NSWorkspace.shared.open(project.settingsURL) }
+            }
+            return
+        }
+        var sheet: NSViewController?
+        let close = { [weak self] in
+            if let sheet { self?.contentViewController?.dismiss(sheet) }
+        }
+        let view = ProjectSettingsView(project: project, onSave: { [weak self] settings in
+            guard let self else { return }
+            let old = project.settings
+            if settings != old && !(old == nil && settings.isEmpty) {
+                do {
+                    try settings.write(root: project.root)
+                } catch {
+                    self.presentError(error)
+                    return
+                }
+                // The user wrote these commands, so they needn't confirm them.
+                settings.commands.forEach { Self.approve($0, root: project.root) }
+            }
+            close()
+            self.projectModel.refresh(document: self.lilyDocument)
+        }, onCancel: close)
+        let hosting = NSHostingController(rootView: view)
+        sheet = hosting
+        contentViewController?.presentAsSheet(hosting)
+    }
+
+    // MARK: Running
+
+    private func start(_ run: EngraveRun, mode: EngraveJob.Mode, completion: EngraveCompletion?) {
+        self.run = run
+        if let completion { run.completions.append(completion) }
+        engraveModel.status = .running(mode)
+        engraveModel.progress = run.isSingle ? nil : (0, run.jobs.count)
+        engraveModel.commandName = run.commandName
+        engraveModel.log = ""
+        // LilyPond uses one core; a few at a time for All Targets.
+        let parallel = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount / 2))
+        for _ in 0..<min(parallel, run.jobs.count) { startNext(run) }
+    }
+
+    private func startNext(_ run: EngraveRun) {
+        guard !run.cancelled, run.started < run.jobs.count else { return }
+        let index = run.started
+        run.started += 1
+        let job = run.jobs[index]
+        do {
+            try job.start(output: { [weak self] text in
+                DispatchQueue.main.async {
+                    guard let self, self.run === run, run.isSingle else { return }
+                    self.engraveModel.log += text
+                }
+            }, completion: { [weak self] result in
+                DispatchQueue.main.async { self?.jobFinished(run, index: index, result: result) }
+            })
+        } catch {
+            let what = run.commandName.map { "run \($0)" } ?? "start LilyPond"
+            jobFinished(run, index: index, result: EngraveJob.Result(
+                exitStatus: -1, cancelled: false, log: "Couldn't \(what): \(error.localizedDescription)\n",
+                messages: [], pdfs: [], midis: [], duration: 0))
+        }
+    }
+
+    private func jobFinished(_ run: EngraveRun, index: Int, result: EngraveJob.Result) {
+        run.results[index] = result
+        if run.cancelled {
+            // Jobs that never started count as stopped.
+            for unstarted in run.started..<run.jobs.count {
+                run.results[unstarted] = EngraveJob.Result(exitStatus: 0, cancelled: true, log: "", messages: [],
+                                                           pdfs: [], midis: [], duration: 0)
+            }
+            run.started = run.jobs.count
+        }
+        if self.run === run && !run.isSingle {
+            engraveModel.progress = (run.results.count, run.jobs.count)
+            engraveModel.log = run.combined().log
+        }
+        if run.isFinished {
+            finish(run)
+        } else {
+            startNext(run)
+        }
+    }
+
+    private func finish(_ finishedRun: EngraveRun) {
+        var result = finishedRun.combined()
+        if let project = finishedRun.project { result = commandResult(result, in: project, since: finishedRun.begin) }
+        // Whoever waits for this run gets its result, even if a newer one replaced it.
+        for completion in finishedRun.completions { completion(.success(result)) }
+        guard finishedRun === run else { return }
+        run = nil
         engraveModel.log = result.log
         engraveModel.messages = result.messages
         issueIndex = -1
@@ -415,13 +633,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                                             warnings: engraveModel.warningCount, duration: result.duration)
         }
         // Markers for this document's own file, also when the main file was engraved.
-        editor.showIssues(result.messages, forPath: lilyDocument.fileURL?.path ?? engravedSource?.path)
+        editor.showIssues(result.messages, forPath: lilyDocument.fileURL?.path ?? finishedRun.jobs.first?.source.path)
         projectModel.refresh(document: lilyDocument)
 
         let pdfs = result.pdfs.filter { FileManager.default.fileExists(atPath: $0.path) }
         if !pdfs.isEmpty { engraveModel.pdfs = pdfs }
         if !result.midis.isEmpty { engraveModel.midis = result.midis }
         if let pdf = pdfs.first {
+            engravedSource = finishedRun.commandName == nil ? finishedRun.jobs[finishedRun.preferred].source
+                : (projectModel.project?.target ?? lilyDocument.fileURL)
             preview.load(pdf)
             if previewItem.isCollapsed { previewItem.animator().isCollapsed = false }
             highlightCursorInPreview()
@@ -432,10 +652,64 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
     }
 
+    /// A build command's result, with messages that point at project files
+    /// even when the command ran LilyPond somewhere else, and the PDF of
+    /// the document's target first (or its existing PDF, if the log names
+    /// none).
+    private func commandResult(_ result: EngraveJob.Result, in project: LilyPondProject, since start: Date)
+        -> EngraveJob.Result {
+        var result = result
+        let sources = Self.sourceFiles(in: project.files)
+        // The log names output files relative to directories it may not
+        // mention (Apple's make doesn't say where it goes): look for files of
+        // that name the command wrote in the project.
+        let fileManager = FileManager.default
+        lazy var written: [URL] = Self.allFiles(in: LilyPondProject.scanFolder(project.root)).filter { url in
+            let date = (try? fileManager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            return date.map { $0 >= start.addingTimeInterval(-1) } ?? false
+        }
+        func located(_ urls: [URL]) -> [URL] {
+            urls.compactMap { url in
+                if fileManager.fileExists(atPath: url.path) { return url }
+                return written.first { $0.lastPathComponent == url.lastPathComponent }
+            }
+        }
+        result.pdfs = located(result.pdfs)
+        result.midis = located(result.midis)
+        result.messages = result.messages.map { message in
+            guard !FileManager.default.fileExists(atPath: message.file) else { return message }
+            let name = "/" + URL(fileURLWithPath: message.file).lastPathComponent
+            let matches = sources.filter { $0.path.hasSuffix(name) }
+            var message = message
+            if matches.count == 1 { message.file = matches[0].path }
+            return message
+        }
+        let target = project.target ?? project.targets.first
+        if result.pdfs.isEmpty, let target {
+            result.pdfs = EngraveJob.existingOutputs(for: target, outputDirectory: project.outputDirectory).pdfs
+        }
+        if let base = target?.deletingPathExtension().lastPathComponent,
+           let index = result.pdfs.firstIndex(where: { $0.deletingPathExtension().lastPathComponent == base }) {
+            result.pdfs.insert(result.pdfs.remove(at: index), at: 0)
+        }
+        return result
+    }
+
+    private static func allFiles(in files: [ProjectFile]) -> [URL] {
+        files.flatMap { $0.isDirectory ? allFiles(in: $0.children) : [$0.url] }
+    }
+
+    private static func sourceFiles(in files: [ProjectFile]) -> [URL] {
+        files.flatMap { file -> [URL] in
+            if file.isDirectory { return sourceFiles(in: file.children) }
+            return LilyPondProject.sourceExtensions.contains(file.url.pathExtension.lowercased()) ? [file.url] : []
+        }
+    }
+
     /// Shows the PDF from an earlier run, and enables Play for its MIDI, if
     /// they're at least as new as the document (as Frescobaldi does).
-    private func showExistingOutput(for main: URL) {
-        let outputs = EngraveJob.existingOutputs(for: main)
+    private func showExistingOutput(for main: URL, in project: LilyPondProject) {
+        let outputs = EngraveJob.existingOutputs(for: main, outputDirectory: project.outputDirectory)
         guard !outputs.pdfs.isEmpty || !outputs.midis.isEmpty else { return }
         engravedSource = main
         engraveModel.pdfs = outputs.pdfs
@@ -728,5 +1002,74 @@ private final class NestedSplitViewController: NSSplitViewController {
     override func responds(to selector: Selector!) -> Bool {
         if selector == #selector(NSSplitViewController.toggleSidebar(_:)) { return false }
         return super.responds(to: selector)
+    }
+}
+
+/// One press of ⌘R: a LilyPond job per target (a few run at a time), or a
+/// build command.
+private final class EngraveRun {
+    let jobs: [EngraveJob]
+    /// What each job engraves, for the log (target paths, or the command).
+    let names: [String]
+    /// The job whose PDF the preview shows: the document's own target.
+    let preferred: Int
+    let commandName: String?
+    /// For build commands, to find the files their messages mean.
+    let project: LilyPondProject?
+    let begin = Date()
+    var results: [Int: EngraveJob.Result] = [:]
+    var started = 0
+    var cancelled = false
+    /// Waiting for the run to finish (Claude's engrave_document).
+    var completions: [DocumentWindowController.EngraveCompletion] = []
+
+    init(jobs: [EngraveJob], names: [String], preferred: Int = 0, commandName: String? = nil,
+         project: LilyPondProject? = nil) {
+        self.jobs = jobs
+        self.names = names
+        self.preferred = preferred
+        self.commandName = commandName
+        self.project = project
+    }
+
+    var isSingle: Bool { jobs.count == 1 }
+    var isFinished: Bool { results.count == jobs.count }
+
+    func cancel() {
+        cancelled = true
+        jobs.forEach { $0.cancel() }
+    }
+
+    /// The finished jobs as one result: their logs one after the other under
+    /// a heading each, all their messages, and the preferred job's PDFs first.
+    func combined() -> EngraveJob.Result {
+        let finished = jobs.indices.compactMap { index in results[index].map { (index, $0) } }
+        if isSingle, let only = finished.first?.1 { return only }
+        var log = ""
+        var messages: [LilyPondMessage] = []
+        var pdfs: [URL] = []
+        var midis: [URL] = []
+        for (index, result) in finished where !(result.cancelled && result.log.isEmpty) {
+            log += "──── \(names[index]) ────\n"
+            let offset = log.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+            messages += result.messages.map { message in
+                var message = message
+                message.logLine += offset
+                return message
+            }
+            log += result.log.hasSuffix("\n") || result.log.isEmpty ? result.log : result.log + "\n"
+            if index == preferred {
+                pdfs.insert(contentsOf: result.pdfs, at: 0)
+                midis.insert(contentsOf: result.midis, at: 0)
+            } else {
+                pdfs += result.pdfs
+                midis += result.midis
+            }
+        }
+        let results = finished.map(\.1)
+        return EngraveJob.Result(
+            exitStatus: results.first { $0.exitStatus != 0 }?.exitStatus ?? 0,
+            cancelled: results.contains { $0.cancelled }, log: log, messages: messages, pdfs: pdfs, midis: midis,
+            duration: Date().timeIntervalSince(begin))
     }
 }

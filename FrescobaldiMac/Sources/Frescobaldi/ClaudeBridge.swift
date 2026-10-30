@@ -233,6 +233,8 @@ extension DocumentWindowController {
             reply(result.map { result in
                 var object = EngraveReport.json(result).object ?? [:]
                 object["document"] = .string(id)
+                // A file of a larger project engraves the project's target.
+                if let target = self.engraveModel.targetName { object["engraved"] = .string(target) }
                 return .object(object)
             })
         }

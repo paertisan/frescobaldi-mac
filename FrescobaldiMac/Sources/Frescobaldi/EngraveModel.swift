@@ -20,8 +20,13 @@ final class EngraveModel: ObservableObject {
     @Published var pdfs: [URL] = []
     @Published var midis: [URL] = []
     @Published var selectedTab: PanelTab = .issues
-    /// The project's main file when it isn't the document itself.
+    /// What's engraved when it isn't the document itself: the project's
+    /// main file, a chosen target, a build command.
     @Published var targetName: String?
+    /// Engraving several targets: how many are done.
+    @Published var progress: (done: Int, total: Int)?
+    /// Running a build command instead of LilyPond.
+    @Published var commandName: String?
 
     /// Set by the window: jump to an issue.
     var onSelectMessage: ((LilyPondMessage) -> Void)?
@@ -58,14 +63,24 @@ struct EngraveStatusView: View {
             case let .running(mode):
                 ProgressView()
                     .controlSize(.small)
-                Text(model.targetName.map { "Engraving \($0)…" }
-                     ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
+                if let command = model.commandName {
+                    Text("Running \(command)…")
+                } else if let progress = model.progress {
+                    Text("Engraving \(progress.total) targets (\(progress.done) done)…")
+                } else {
+                    Text(model.targetName.map { "Engraving \($0)…" }
+                         ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
+                }
             case let .finished(succeeded, errors, warnings, duration):
                 Image(systemName: succeeded && errors == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill")
                     .foregroundStyle(succeeded && errors == 0 ? Color.green : Color.red)
-                Text(succeeded && errors == 0
-                     ? "Engraved\(model.targetName.map { " \($0)" } ?? "") in \(duration.formatted(.number.precision(.fractionLength(1)))) s"
-                     : "Engraving failed")
+                let time = "\(duration.formatted(.number.precision(.fractionLength(1)))) s"
+                let what = model.progress.map { " \($0.total) targets" } ?? model.targetName.map { " \($0)" } ?? ""
+                if let command = model.commandName {
+                    Text(succeeded && errors == 0 ? "Ran \(command) in \(time)" : "\(command) failed")
+                } else {
+                    Text(succeeded && errors == 0 ? "Engraved\(what) in \(time)" : "Engraving\(what) failed")
+                }
                 if errors > 0 { IssueBadge(count: errors, error: true) }
                 if warnings > 0 { IssueBadge(count: warnings, error: false) }
             case .cancelled:

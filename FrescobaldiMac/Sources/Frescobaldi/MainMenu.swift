@@ -141,7 +141,11 @@ enum MainMenu {
         add(menu, "Engrave", #selector(DocumentWindowController.engravePreview(_:)), "r", symbol: "music.note")
         add(menu, "Engrave for Publishing", #selector(DocumentWindowController.engravePublish(_:)), "r",
             [.command, .shift])
+        add(menu, "Engrave All Targets", #selector(DocumentWindowController.engraveAllTargets(_:)), "r",
+            [.command, .option], symbol: "square.stack")
         add(menu, "Stop Engraving", #selector(DocumentWindowController.stopEngraving(_:)), ".", symbol: "stop.fill")
+        menu.addItem(.separator())
+        add(menu, "Project Settings…", #selector(DocumentWindowController.showProjectSettings(_:)), symbol: "gearshape")
         menu.addItem(.separator())
         add(menu, "Play MIDI", #selector(DocumentWindowController.toggleMIDI(_:)), "p", [.command, .option],
             symbol: "play.fill")
