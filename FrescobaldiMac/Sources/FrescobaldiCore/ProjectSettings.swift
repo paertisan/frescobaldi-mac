@@ -117,6 +117,27 @@ public struct ProjectSettings: Codable, Equatable, Sendable {
         return root.appendingPathComponent(expanded).standardizedFileURL
     }
 
+    /// How to write `url` in the file so the project still works when moved
+    /// or shared: relative to the root (also up to two levels above it),
+    /// else `~/...`, else absolute.
+    public static func portablePath(for url: URL, root: URL, fileManager: FileManager = .default) -> String {
+        let path = url.standardizedFileURL.path
+        var base = root.standardizedFileURL
+        if path == base.path { return "." }
+        var prefix = ""
+        for _ in 0..<3 {
+            if path.hasPrefix(base.path + "/") { return prefix + path.dropFirst(base.path.count + 1) }
+            let parent = base.deletingLastPathComponent()
+            if parent.path == base.path { break }
+            if path == parent.path { return prefix + ".." }
+            base = parent
+            prefix += "../"
+        }
+        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+        if path.hasPrefix(home + "/") { return "~/" + path.dropFirst(home.count + 1) }
+        return path
+    }
+
     public func includeDirectories(root: URL) -> [URL] {
         includePaths.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map { Self.url($0, root: root) }
     }

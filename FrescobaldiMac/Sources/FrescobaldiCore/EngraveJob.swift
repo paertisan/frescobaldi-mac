@@ -23,6 +23,17 @@ public final class EngraveJob: @unchecked Sendable {
         public var duration: TimeInterval
 
         public var succeeded: Bool { !cancelled && exitStatus == 0 }
+
+        public init(exitStatus: Int32, cancelled: Bool, log: String, messages: [LilyPondMessage],
+                    pdfs: [URL], midis: [URL], duration: TimeInterval) {
+            self.exitStatus = exitStatus
+            self.cancelled = cancelled
+            self.log = log
+            self.messages = messages
+            self.pdfs = pdfs
+            self.midis = midis
+            self.duration = duration
+        }
     }
 
     public let lilypond: URL
@@ -31,6 +42,10 @@ public final class EngraveJob: @unchecked Sendable {
     public let outputBase: URL
     public let mode: Mode
     public let extraArguments: [String]
+    /// A project's build command run instead of LilyPond (`/bin/sh -c`).
+    public let shellCommand: String?
+    /// LilyPond's working directory: the source's folder, or the command's.
+    public let workingDirectory: URL
 
     /// Delivers output and completion in order.
     private let queue = DispatchQueue(label: "EngraveJob")
@@ -52,11 +67,32 @@ public final class EngraveJob: @unchecked Sendable {
         self.outputBase = outputBase ?? source.deletingPathExtension()
         self.mode = mode
         self.extraArguments = extraArguments
+        shellCommand = nil
+        workingDirectory = source.deletingLastPathComponent()
+    }
+
+    /// Runs a build command (make, meson, a script) in `directory`. Its log
+    /// is read like LilyPond's: messages and output files, with paths
+    /// relative to the directory make says it entered.
+    public init(command: String, directory: URL) {
+        lilypond = URL(fileURLWithPath: "/bin/sh")
+        source = directory
+        outputBase = directory
+        mode = .preview
+        extraArguments = []
+        shellCommand = command
+        workingDirectory = directory
     }
 
     /// Arguments passed to `lilypond`.
     public var arguments: [String] {
-        [mode == .preview ? "-dpoint-and-click" : "-dno-point-and-click", "--pdf"]
+        if let shellCommand { return ["-c", shellCommand] }
+        // With an output folder LilyPond works in that folder, so keep the
+        // source's folder on the include path.
+        let sourceFolder = source.deletingLastPathComponent().standardizedFileURL
+        let keepFolder = outputBase.deletingLastPathComponent().standardizedFileURL.path != sourceFolder.path
+        return [mode == .preview ? "-dpoint-and-click" : "-dno-point-and-click", "--pdf"]
+            + (keepFolder ? ["-I", sourceFolder.path] : [])
             + extraArguments
             + ["-o", outputBase.path, source.path]
     }
@@ -83,7 +119,7 @@ public final class EngraveJob: @unchecked Sendable {
         process.executableURL = lilypond
         process.arguments = arguments
         process.environment = Self.environment()
-        process.currentDirectoryURL = source.deletingLastPathComponent()
+        process.currentDirectoryURL = workingDirectory
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -95,8 +131,10 @@ public final class EngraveJob: @unchecked Sendable {
         finished.enter() // process exit
         process.terminationHandler = { _ in finished.leave() }
 
-        try FileManager.default.createDirectory(at: outputBase.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
+        if shellCommand == nil {
+            try FileManager.default.createDirectory(at: outputBase.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+        }
         lock.withLock { self.process = process }
         started = Date()
         do {
@@ -126,15 +164,16 @@ public final class EngraveJob: @unchecked Sendable {
 
         finished.notify(queue: queue) { [self] in
             let text = String(decoding: log, as: UTF8.self)
-            let directory = process.currentDirectoryURL ?? source.deletingLastPathComponent()
-            let outputs = LilyPondLogParser.outputFiles(in: text).map {
-                URL(fileURLWithPath: $0, relativeTo: directory).standardizedFileURL
-            }
+            let directory = workingDirectory
+            // With an output folder LilyPond changes to it, and names output
+            // files relative to it; build commands may run it anywhere.
+            let messages = LilyPondLogParser.resolvingPaths(LilyPondLogParser.parse(text), in: text, base: directory)
+            let outputs = LilyPondLogParser.outputFiles(in: text, base: directory)
             let result = Result(
                 exitStatus: process.terminationStatus,
                 cancelled: lock.withLock { wasCancelled },
                 log: text,
-                messages: LilyPondLogParser.parse(text),
+                messages: messages,
                 pdfs: outputs.filter { $0.pathExtension.lowercased() == "pdf" },
                 midis: outputs.filter { ["mid", "midi"].contains($0.pathExtension.lowercased()) },
                 duration: Date().timeIntervalSince(started ?? Date()))

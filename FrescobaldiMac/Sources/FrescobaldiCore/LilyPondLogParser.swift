@@ -110,13 +110,77 @@ public enum LilyPondLogParser {
         return result
     }
 
+    private static let directoryPattern = try! NSRegularExpression(
+        pattern: #"^(?:\S*make(?:\[\d+\])?: (Entering|Leaving) directory|ninja: (Entering) directory|(Changing) working directory to:?) [`'"‘](.+?)['"’]"#)
+
+    /// The working directory in effect at each log line, following make's
+    /// `Entering directory` / `Leaving directory`, ninja's `Entering
+    /// directory` and LilyPond's `Changing working directory to`.
+    static func directories(in lines: [String], base: URL) -> [URL] {
+        var stack = [base.standardizedFileURL]
+        var result: [URL] = []
+        for line in lines {
+            result.append(stack[stack.count - 1])
+            let ns = line as NSString
+            guard let m = directoryPattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
+                continue
+            }
+            let path = ns.substring(with: m.range(at: 4))
+            let url = URL(fileURLWithPath: path, relativeTo: stack[stack.count - 1]).standardizedFileURL
+            if m.range(at: 1).location != NSNotFound && ns.substring(with: m.range(at: 1)) == "Leaving" {
+                if stack.count > 1 { stack.removeLast() }
+            } else if m.range(at: 3).location != NSNotFound {
+                stack[stack.count - 1] = url
+            } else {
+                stack.append(url)
+            }
+        }
+        return result
+    }
+
+    /// Makes relative message paths absolute, for logs of build commands
+    /// that run LilyPond in other directories: relative to the directory in
+    /// effect at that line, else to `base`.
+    public static func resolvingPaths(_ messages: [LilyPondMessage], in log: String, base: URL) -> [LilyPondMessage] {
+        let directories = directories(in: splitLines(log), base: base)
+        return messages.map { message in
+            var message = message
+            message.file = resolve(message.file, at: message.logLine, directories: directories, base: base).path
+            return message
+        }
+    }
+
+    /// Output files announced in a build command's log, as absolute URLs.
+    public static func outputFiles(in log: String, base: URL) -> [URL] {
+        let lines = splitLines(log)
+        let directories = directories(in: lines, base: base)
+        var result: [URL] = []
+        for (index, line) in lines.enumerated() {
+            let ns = line as NSString
+            for m in outputPattern.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+                let url = resolve(ns.substring(with: m.range(at: 1)), at: index, directories: directories, base: base)
+                if !result.contains(url) { result.append(url) }
+            }
+        }
+        return result
+    }
+
+    private static func resolve(_ path: String, at line: Int, directories: [URL], base: URL) -> URL {
+        if path.hasPrefix("/") { return URL(fileURLWithPath: path).standardizedFileURL }
+        let directory = line < directories.count ? directories[line] : base
+        let candidate = URL(fileURLWithPath: path, relativeTo: directory).standardizedFileURL
+        if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        let fallback = URL(fileURLWithPath: path, relativeTo: base).standardizedFileURL
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : candidate
+    }
+
     /// Lines like `Processing `x.ly'`, `Parsing...`, `Interpreting music...`
     /// that end a message's context early.
     static func isProgressLine(_ line: String) -> Bool {
         let prefixes = ["Processing `", "Parsing...", "Interpreting music...", "Preprocessing graphical objects...",
                         "Finding the ideal number of pages...", "Fitting music on", "Drawing systems...",
                         "Converting to", "MIDI output to", "Success: compilation", "Layout output to",
-                        "GNU LilyPond", "Changing working directory to"]
+                        "GNU LilyPond", "Changing working directory to", "make: ", "make[", "ninja: "]
         return prefixes.contains { line.hasPrefix($0) }
     }
 

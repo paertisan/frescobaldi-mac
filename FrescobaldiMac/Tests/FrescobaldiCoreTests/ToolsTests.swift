@@ -95,7 +95,8 @@ private func pythonLyTool() -> PythonLyTool? {
         #expect(job.arguments == ["-dpoint-and-click", "--pdf", "-o", "/Users/me/Song", "/Users/me/Song.ly"])
         let publish = EngraveJob(lilypond: URL(fileURLWithPath: "/x"), source: URL(fileURLWithPath: "/a/b.ly"),
                                  outputBase: URL(fileURLWithPath: "/tmp/out/b"), mode: .publish)
-        #expect(publish.arguments == ["-dno-point-and-click", "--pdf", "-o", "/tmp/out/b", "/a/b.ly"])
+        #expect(publish.arguments == ["-dno-point-and-click", "--pdf", "-I", "/a", "-o", "/tmp/out/b", "/a/b.ly"],
+                "LilyPond works in the output folder, so the source's folder stays on the include path")
     }
 
     @Test func existingOutputs() throws {
@@ -147,8 +148,9 @@ private func pythonLyTool() -> PythonLyTool? {
         let fake = dir.appendingPathComponent("lilypond")
         try #"""
         #!/bin/sh
-        # args: -dpoint-and-click --pdf -o BASE FILE
-        BASE="$4"; FILE="$5"
+        # args: -dpoint-and-click --pdf [-I DIR] -o BASE FILE
+        while [ $# -gt 2 ]; do shift; done
+        BASE="$1"; FILE="$2"
         say() { printf '%s\n' "$1" >&2; }
         say "GNU LilyPond 2.26.0 (running Guile 3.0)"
         say "Processing \`$FILE'"

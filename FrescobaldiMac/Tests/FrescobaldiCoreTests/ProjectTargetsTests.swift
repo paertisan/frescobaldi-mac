@@ -63,6 +63,18 @@ import Testing
                 == root.appendingPathComponent("build/flute").path)
         #expect(try JSONDecoder().decode(ProjectSettings.self, from: Data("{}".utf8)) == ProjectSettings())
     }
+
+    @Test func portablePaths() {
+        let root = URL(fileURLWithPath: "/work/songs/Song")
+        func path(_ p: String) -> String { ProjectSettings.portablePath(for: URL(fileURLWithPath: p), root: root) }
+        #expect(path("/work/songs/Song/lib") == "lib")
+        #expect(path("/work/songs/lib") == "../lib")
+        #expect(path("/work/lib/oll") == "../../lib/oll")
+        #expect(path("/work/songs") == "..")
+        #expect(path("/opt/lilypond") == "/opt/lilypond")
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        #expect(path(home.appendingPathComponent("ly/oll").path) == "~/ly/oll")
+    }
 }
 
 @Suite struct ProjectTargetsTests {
@@ -165,5 +177,50 @@ import Testing
         #expect(project.problems.first?.severity == .error)
         #expect(project.problems.first?.message.hasPrefix("frescobaldi.json couldn't be read") == true)
         #expect(names(project.targets, root) == ["book.ly", "score.ly", "parts/flute.ly"], "falls back to finding them")
+    }
+}
+
+@Suite struct BuildLogTests {
+    @Test func followsMakeAndLilyPondDirectories() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("BuildLog-\(UUID().uuidString.prefix(8))")
+        for dir in ["parts", "build", "music"] {
+            try FileManager.default.createDirectory(at: base.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data().write(to: base.appendingPathComponent("music/flute.ily"))
+        let log = """
+            make -C parts
+            make[1]: Entering directory '\(base.path)/parts'
+            lilypond flute.ly
+            ../music/flute.ily:2:29: error: unknown command: `\\foo'
+            flute = \\relative { c'' d e
+                                        \\foo }
+            Converting to `flute.pdf'...
+            make[1]: Leaving directory '\(base.path)/parts'
+            Changing working directory to: `\(base.path)/build'
+            Converting to `score.pdf'...
+            """
+        let messages = LilyPondLogParser.resolvingPaths(LilyPondLogParser.parse(log), in: log, base: base)
+        #expect(messages.map(\.file) == [base.appendingPathComponent("music/flute.ily").standardizedFileURL.path])
+        #expect(messages.first?.context.count == 2)
+        #expect(LilyPondLogParser.outputFiles(in: log, base: base).map { LilyPondProject.relativePath($0, to: base) }
+                == ["parts/flute.pdf", "build/score.pdf"])
+    }
+
+    @Test func runsACommand() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("Command-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let job = EngraveJob(command: "echo \"x.ly:1:2: warning: hi\"; pwd; exit 3", directory: base)
+        let result: EngraveJob.Result = try await withCheckedThrowingContinuation { continuation in
+            do {
+                try job.start(output: { _ in }, completion: { continuation.resume(returning: $0) })
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        #expect(result.exitStatus == 3)
+        #expect(result.messages.first?.file == base.appendingPathComponent("x.ly").standardizedFileURL.path)
+        #expect(result.log.contains(base.lastPathComponent))
     }
 }
