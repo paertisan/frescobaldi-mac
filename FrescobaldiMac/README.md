@@ -33,12 +33,12 @@ still open.
 |---|---|
 | App lifecycle | AppKit (`main.swift` + `AppDelegate`), programmatic main menu, NSDocument architecture |
 | Document | `@objc(LilyPondDocument) NSDocument` owning an `NSTextStorage`; `autosavesInPlace = true` (Versions, Revert To, rename/move in the title bar, proxy icon, edited dot, window tabs) |
-| Window | `NSSplitViewController`: sidebar (outline) · editor + collapsible log (nested vertical split) · PDF preview. `fullSizeContentView`, unified `NSToolbar` with SF Symbols, centered engrave-status item (SwiftUI in `NSHostingView`) |
+| Window | `NSSplitViewController`: sidebar (outline) · editor + collapsible log (nested vertical split) · PDF preview. `fullSizeContentView`, unified `NSToolbar` with SF Symbols (Engrave turns into Stop while LilyPond runs), centered engrave status as plain text (SwiftUI in `NSHostingView`). See [Design](#design) |
 | Editor | `NSTextView` on TextKit 1 (`usingTextLayoutManager: false`), Cascadia Code (or any monospaced font), current-line highlight, line-number `NSRulerView` with error/warning markers (an app-wide `IssueMarkerStore` keeps them per file: a run replaces the markers of every file it read, so a window for an include file shows its errors and a clean engrave clears them; they move with edits), auto-indent, 2-space indent, toggle comment (⌘/), shift left/right (⌘[ ⌘]), go to line (⌘L), find bar |
 | Highlighting | Swift lexer in `FrescobaldiCore` (resumable state, UTF-16 `NSRange` tokens). Colors are applied as `NSLayoutManager` temporary attributes on the visible range only, with lexer-state checkpoints. Colors come from the theme (see [Themes](#themes)) |
 | Engraving | `Process` running `lilypond -dpoint-and-click --pdf -o <dir/base> <abs path>`. `LANG=en_US.UTF-8` keeps messages parseable; PATH is extended with `/opt/homebrew/bin:/usr/local/bin`. Titled documents are saved first; untitled ones are written to a temp dir. Outputs come from log lines ``Converting to `x.pdf'...`` and ``MIDI output to `x.midi'...``. ⌘R preview, ⇧⌘R publish (`-dno-point-and-click`), ⌘. stop. Optional engrave on save. Export PDF engraves the source again for publishing into a temp folder, since a point-and-click PDF holds every source file's full path (PDFKit can't strip them: removed annotations stay in the file) |
 | Preview | PDFKit `PDFView` that reloads while keeping page and zoom. Opening a document shows the PDF from an earlier run if it's at least as new as the source (`EngraveJob.existingOutputs`: `name.pdf` and `name-*.pdf`, so `\bookOutputSuffix` names count too, but not the outputs of a sibling target such as `name-a4.ly`; the last run's files first). Clicking a `textedit://` link jumps the editor (`showFindIndicator`); `ScoreView` handles those clicks itself (see below). Moving the editor cursor highlights the matching notes in the PDF via a link index. Floating zoom/page controls use `.glassEffect()` on macOS 26 with a material fallback. Empty state uses `ContentUnavailableView` |
-| Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log. Messages without a location (`warning: Unknown paper size`) are listed too and open the log; a message keeps the lines LilyPond prints after it, up to a blank line (the one that explains a Scheme error) |
+| Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log. It starts closed, opens when a run has errors, and closes again after a clean run if it opened by itself. Messages without a location (`warning: Unknown paper size`) are listed too and open the log; a message keeps the lines LilyPond prints after it, up to a blank line (the one that explains a Scheme error) |
 | Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. rel2abs/abs2rel refuse music with `\resetRelativeOctave`, whose pitch python-ly reads as a note (upstream #930). The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
@@ -226,6 +226,33 @@ warnings, score and parts (`ProjectTemplateTests`). Blank staff paper
 ([#1139](https://github.com/frescobaldi/frescobaldi/issues/1139)) was
 already a template: File > New from Template > Blank Music Paper.
 
+## Design
+
+The window aims for the quiet, content-first look of apps like Claude's
+desktop app, Linear and Things: the score and the source are what you
+look at, and the chrome steps back.
+
+- **Warm neutrals, one accent.** Ivory (light) and Charcoal (dark) use the
+  background, sidebar and text greys of Claude's apps (#FAF9F5 / #F5F4ED /
+  #73726C, #262624 / #1F1E1D / #9C9A92) and a clay accent (#C6613F,
+  #D97757 in dark mode), which is also the app's accent color
+  (`Resources/Assets.xcassets`, compiled by `actool`). The notes are the
+  plainest text; commands, durations and comments step back in a few muted
+  colors, all at 4.5:1 contrast or more.
+- **Status as words.** The toolbar says "Engraved in 0.4 s" in grey, or
+  "Engraving failed · 1 error · 1 warning"; only problems get color, and
+  errors and warnings differ in shape as well as color. Nothing is shown
+  for "ready" except a faint ⌘R hint.
+- **Panels when there's something in them.** The issues panel opens for
+  errors and closes after a clean run; the project's suggestions are folded
+  to a count; the run buttons of targets show on hover.
+- **Fewer controls.** One Engrave button that becomes Stop, a target menu
+  without a repeated icon, text tabs instead of segmented controls in the
+  sidebar and the issues panel.
+- **A serif for headings.** Empty panes and the wizard's ensemble title use
+  New York; everything else is the system font.
+- **The New Score window** follows the theme like the document windows.
+
 ## Themes
 
 Settings > Editor sets the font (default Cascadia Code if installed;
@@ -235,9 +262,9 @@ whole window: editor, syntax, gutter, current line, toolbar, sidebar,
 issues panel and the area around the PDF, and gives the window the
 matching light or dark appearance.
 
-Built in, from each project's official palette: Everforest Dark and Light
-(the defaults), Nord, Catppuccin Frappé and Latte, Monokai, and System
-(the system colors). Plus the 326 themes of the
+Built in: Ivory and Charcoal (the defaults; see [Design](#design)), and
+from each project's official palette Everforest Dark and Light, Nord,
+Catppuccin Frappé and Latte, Monokai, and System (the system colors). Plus the 326 themes of the
 [Rainglow](https://github.com/rainglow/jetbrains) collection (MIT, Dayle
 Rees), converted from JetBrains color schemes by
 `scripts/import-jetbrains-themes.py` into `Resources/Themes/rainglow.json`:

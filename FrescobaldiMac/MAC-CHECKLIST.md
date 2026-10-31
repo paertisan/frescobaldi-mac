@@ -228,6 +228,33 @@ Checked in dark and light mode.
 - [ ] Very long player names ("Oboe and English Horn") run past the left
       edge of the page; LilyPond doesn't widen the indent for them.
 
+## 2g. Quieter interface
+
+Checked with the Mahler 9 project (opened only: not engraved or saved;
+its files are unchanged) and a scratch score with an error and a warning,
+in Charcoal (dark) and Ivory (light).
+
+- [x] Toolbar: Engrave becomes Stop while running; the target menu shows
+      the name only; idle status is a faint "⌘R to engrave"; a run ends
+      with "Engraved in 0.4 s" or "Engraving failed · 1 error · 1 warning".
+- [x] The issues panel starts closed, opens for an error, and closes after
+      the fix engraves cleanly; gutter marks go with it.
+- [x] Sidebar: Outline/Project as text tabs; Suggestions folded to a count;
+      sections fold; target run buttons show on hover; folder icons grey.
+- [x] Empty states ("No Preview") with a serif title; no "No Project" flash
+      while a saved file's project loads.
+- [x] Ivory and Charcoal colors (contrast checked: text 13–17.5:1, comments
+      4.6–5.4:1, syntax colors 4.7:1 or more); warm selection.
+- [x] The New Score window follows the theme; the segmented steps and the
+      selected ensemble use the clay accent (the compiled `Assets.car` has
+      #C6613F light, #D97757 dark).
+- [ ] Seen once: after opening the New Score window right after launch,
+      the Mahler window's project and PDF didn't load until the window
+      became key. Not reproduced since.
+- [ ] Engrave as a prominent (tinted) toolbar button: macOS 26's
+      `NSToolbarItem.style = .prominent` showed no effect on macOS 27, so
+      it isn't used.
+
 ## 3. Things to look at closely
 
 - **Line-number ruler with `fullSizeContentView`.** It did draw over the
