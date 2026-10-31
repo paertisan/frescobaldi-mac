@@ -1,109 +1,21 @@
 import Foundation
 
-/// Creates a new multi-file LilyPond project laid out the way larger
-/// projects are usually organized (and as LilyPond's Learning Manual
-/// suggests): the music in one include file per instrument, shared settings
-/// in a style sheet, the score and each part as small files that only put
-/// things together.
+/// Creates a new multi-file LilyPond project from a `ScoreSpec`, laid out
+/// the way larger projects are usually organized: the music in one include
+/// file per player, the shared structure (key, time, marks) in one place,
+/// titles and page settings shared by the score and the parts, and the
+/// score and each part as small files that only put things together.
 ///
 ///     <name>.ly              the full score: engrave this
+///     header.ily             titles, shared with the parts
 ///     style.ily              page format and layout, shared with the parts
-///     music/global.ily       key, time signature, tempo
-///     music/<part>.ily       the music, one file per instrument
-///     parts/<part>.ly        one engravable part per instrument
+///     music/global.ily       key, time signature, tempo, rehearsal marks
+///     music/<player>.ily     the music, one file per player
+///     parts/<player>.ly      one engravable part per player
 ///
 /// Every .ily names the score as its master (`-*- master: ...;`), so
 /// engraving any of them engraves the score.
 public enum ProjectTemplate {
-    public enum Ensemble: String, CaseIterable, Sendable, Identifiable {
-        case piano, voiceAndPiano, choir, stringQuartet, chamberOrchestra
-        public var id: String { rawValue }
-
-        public var title: String {
-            switch self {
-            case .piano: "Piano"
-            case .voiceAndPiano: "Voice and Piano"
-            case .choir: "SATB Choir"
-            case .stringQuartet: "String Quartet"
-            case .chamberOrchestra: "Chamber Orchestra"
-            }
-        }
-
-        var groups: [(name: String?, context: String, instruments: [Instrument])] {
-            switch self {
-            case .piano:
-                [(nil, "", [.piano])]
-            case .voiceAndPiano:
-                [(nil, "", [.voice, .piano])]
-            case .choir:
-                [("Choir", "ChoirStaff", [.soprano, .alto, .tenor, .bass])]
-            case .stringQuartet:
-                [("Strings", "StaffGroup", [.violinI, .violinII, .viola, .cello])]
-            case .chamberOrchestra:
-                [("Woodwinds", "StaffGroup", [.flute, .oboe, .clarinet, .bassoon]),
-                 ("Brass", "StaffGroup", [.horn, .trumpet]),
-                 ("Percussion", "", [.timpani]),
-                 ("Strings", "StaffGroup", [.violinI, .violinII, .viola, .cello, .doubleBass])]
-            }
-        }
-    }
-
-    struct Instrument {
-        enum Kind { case single, piano, voice }
-        var name: String
-        var shortName: String
-        /// The music variable.
-        var variable: String
-        /// File name without extension.
-        var file: String
-        var clef: String
-        var relative: String
-        var midi: String
-        var kind: Kind = .single
-        /// Written pitch for transposing instruments: `\transposition` value.
-        var transposition: String?
-
-        static let piano = Instrument(name: "Piano", shortName: "Pno.", variable: "piano", file: "piano",
-                                      clef: "treble", relative: "c''", midi: "acoustic grand", kind: .piano)
-        static let voice = Instrument(name: "Voice", shortName: "V.", variable: "melody", file: "voice",
-                                      clef: "treble", relative: "c''", midi: "voice oohs", kind: .voice)
-        static let soprano = Instrument(name: "Soprano", shortName: "S.", variable: "soprano", file: "soprano",
-                                        clef: "treble", relative: "c''", midi: "choir aahs", kind: .voice)
-        static let alto = Instrument(name: "Alto", shortName: "A.", variable: "alto", file: "alto",
-                                     clef: "treble", relative: "c'", midi: "choir aahs", kind: .voice)
-        static let tenor = Instrument(name: "Tenor", shortName: "T.", variable: "tenor", file: "tenor",
-                                      clef: "treble_8", relative: "c'", midi: "choir aahs", kind: .voice)
-        static let bass = Instrument(name: "Bass", shortName: "B.", variable: "bass", file: "bass",
-                                     clef: "bass", relative: "c", midi: "choir aahs", kind: .voice)
-        static let violinI = Instrument(name: "Violin I", shortName: "Vl. I", variable: "violinI", file: "violin-1",
-                                        clef: "treble", relative: "c''", midi: "violin")
-        static let violinII = Instrument(name: "Violin II", shortName: "Vl. II", variable: "violinII",
-                                         file: "violin-2", clef: "treble", relative: "c''", midi: "violin")
-        static let viola = Instrument(name: "Viola", shortName: "Va.", variable: "viola", file: "viola",
-                                      clef: "alto", relative: "c'", midi: "viola")
-        static let cello = Instrument(name: "Cello", shortName: "Vc.", variable: "cello", file: "cello",
-                                      clef: "bass", relative: "c", midi: "cello")
-        static let doubleBass = Instrument(name: "Double Bass", shortName: "Cb.", variable: "doubleBass",
-                                           file: "double-bass", clef: "bass_8", relative: "c", midi: "contrabass")
-        static let flute = Instrument(name: "Flute", shortName: "Fl.", variable: "flute", file: "flute",
-                                      clef: "treble", relative: "c''", midi: "flute")
-        static let oboe = Instrument(name: "Oboe", shortName: "Ob.", variable: "oboe", file: "oboe",
-                                     clef: "treble", relative: "c''", midi: "oboe")
-        static let clarinet = Instrument(name: "Clarinet in B♭", shortName: "Cl.", variable: "clarinet",
-                                         file: "clarinet", clef: "treble", relative: "c''", midi: "clarinet",
-                                         transposition: "bes")
-        static let bassoon = Instrument(name: "Bassoon", shortName: "Bn.", variable: "bassoon", file: "bassoon",
-                                        clef: "bass", relative: "c", midi: "bassoon")
-        static let horn = Instrument(name: "Horn in F", shortName: "Hn.", variable: "horn", file: "horn",
-                                     clef: "treble", relative: "c''", midi: "french horn",
-                                     transposition: "f")
-        static let trumpet = Instrument(name: "Trumpet in B♭", shortName: "Tpt.", variable: "trumpet",
-                                        file: "trumpet", clef: "treble", relative: "c''", midi: "trumpet",
-                                        transposition: "bes")
-        static let timpani = Instrument(name: "Timpani", shortName: "Timp.", variable: "timpani", file: "timpani",
-                                        clef: "bass", relative: "c", midi: "timpani")
-    }
-
     /// "My Little Song" → "my-little-song".
     public static func slug(_ title: String) -> String {
         let folded = title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).lowercased()
@@ -111,233 +23,484 @@ public enum ProjectTemplate {
         return parts.isEmpty ? "score" : parts.joined(separator: "-")
     }
 
-    public static func mainFileName(title: String) -> String { slug(title) + ".ly" }
+    public static func mainFileName(name: String) -> String { slug(name) + ".ly" }
 
-    /// The files to write, relative to the project folder.
-    public static func files(title: String, ensemble: Ensemble, version: LilyPondVersion?,
-                             paperSize: String = "a4") -> [(path: String, contents: String)] {
-        let version = "\\version \"\(version?.description ?? "2.24.0")\""
-        let main = mainFileName(title: title)
-        let instruments = ensemble.groups.flatMap(\.instruments)
-        let titleString = title.replacingOccurrences(of: "\"", with: "\\\"")
-        var files: [(String, String)] = []
+    /// The files to write, relative to the project folder. `name` is the
+    /// project's (the folder's) name, which names the score file; the title
+    /// is the spec's, or `name` if it has none.
+    public static func files(for spec: ScoreSpec, name: String, version: LilyPondVersion?)
+        -> [(path: String, contents: String)] {
+        Writer(spec: spec, name: name, version: version).files()
+    }
+}
 
-        // The score.
-        var score = """
-            \(version)
+private struct Writer {
+    let spec: ScoreSpec
+    let main: String
+    let title: String
+    let players: [ResolvedPlayer]
+    let version: String
+    let language: PitchLanguage
+    /// Pianos and organs: their staves are called "right" and "left" unless
+    /// there are several.
+    let keyboards: Int
 
-            % \(title)
-            %
-            % Project layout: engrave this file for the full score.
-            %   \(main.padding(toLength: 22, withPad: " ", startingAt: 0))this file: puts the score together
-            %   style.ily              page format and layout, shared with the parts
-            %   music/global.ily       key, time signature, tempo
-            %   music/<part>.ily       the music, one file per instrument
-            """
-        if instruments.count > 1 { score += "\n%   parts/<part>.ly        one part per instrument" }
-        score += """
+    init(spec: ScoreSpec, name: String, version: LilyPondVersion?) {
+        self.spec = spec
+        main = ProjectTemplate.mainFileName(name: name)
+        let title = spec.title.trimmingCharacters(in: .whitespaces)
+        self.title = title.isEmpty ? name : title
+        players = spec.resolvedPlayers
+        self.version = "\\version \"\(version?.description ?? "2.24.0")\""
+        language = spec.language
+        keyboards = players.filter { $0.instrument.kind == .grand || $0.instrument.kind == .organ }.count
+    }
 
-            % The .ily files name this file as their master, so engraving any of
-            % them in Frescobaldi engraves the score.
-
-            \\include "style.ily"
-            \\include "music/global.ily"
-            \(instruments.map { "\\include \"music/\($0.file).ily\"" }.joined(separator: "\n"))
-
-            \\header {
-              title = "\(titleString)"
-              composer = ""
-            }
-
-            \\score {
-              <<
-
-            """
-        for group in ensemble.groups {
-            let staves = group.instruments.map { staff($0, indent: group.context.isEmpty ? 4 : 6) }.joined(separator: "\n")
-            if group.context.isEmpty {
-                score += staves + "\n"
-            } else {
-                score += "    \\new \(group.context) = \"\(group.name ?? group.context)\" <<\n\(staves)\n    >>\n"
-            }
+    func files() -> [(path: String, contents: String)] {
+        var files = [(main, score()), ("header.ily", header()), ("style.ily", style()), ("music/global.ily", global())]
+        for player in players {
+            files.append(("music/\(player.file).ily", music(player)))
         }
-        score += """
-              >>
-              \\layout { }
-              \\midi { }
-            }
-
-            """
-        files.append((main, score))
-
-        files.append(("style.ily", """
-            \(version)
-            % -*- master: \(main);
-
-            % Page format and layout, shared by the score and the parts.
-            #(set-global-staff-size 18)
-
-            \\paper {
-              #(set-paper-size "\(paperSize)")
-            }
-
-            \\layout {
-              % Settings for the score and every part, for example:
-              % \\context { \\Staff \\RemoveEmptyStaves }
-            }
-
-            """))
-
-        files.append(("music/global.ily", """
-            \(version)
-            % -*- master: ../\(main);
-
-            % Shared by every instrument: key, time signature, tempo, rehearsal marks.
-            global = {
-              \\key c \\major
-              \\time 4/4
-              \\tempo "Moderato" 4 = 96
-            }
-
-            """))
-
-        for instrument in instruments {
-            files.append(("music/\(instrument.file).ily", music(instrument, version: version, main: main)))
-        }
-
-        if instruments.count > 1 {
-            for instrument in instruments {
-                files.append(("parts/\(instrument.file).ly", part(instrument, version: version, title: titleString)))
+        if spec.hasParts {
+            for player in players where player.instrument.isPlayed {
+                files.append(("parts/\(player.file).ly", part(player)))
             }
         }
         return files
     }
 
-    // MARK: Pieces
+    // MARK: Files
 
-    private static func staff(_ instrument: Instrument, indent: Int) -> String {
-        let pad = String(repeating: " ", count: indent)
-        let names = "instrumentName = \"\(instrument.name)\" shortInstrumentName = \"\(instrument.shortName)\""
-        switch instrument.kind {
-        case .piano:
-            return """
-                \(pad)\\new PianoStaff \\with { \(names) } <<
-                \(pad)  \\new Staff = "right" \\with { midiInstrument = "\(instrument.midi)" } \\pianoRight
-                \(pad)  \\new Staff = "left" \\with { midiInstrument = "\(instrument.midi)" } \\pianoLeft
-                \(pad)>>
-                """
-        case .voice:
-            return """
-                \(pad)\\new Staff \\with { \(names) midiInstrument = "\(instrument.midi)" }
-                \(pad)  \\new Voice = "\(instrument.variable)" \\\(instrument.variable)
-                \(pad)\\new Lyrics \\lyricsto "\(instrument.variable)" \\\(instrument.variable)Words
-                """
-        case .single:
-            return "\(pad)\\new Staff \\with { \(names) midiInstrument = \"\(instrument.midi)\" } \\\(instrument.variable)"
-        }
+    /// `\version`, the master and `\language` lines.
+    private func top(master: String?, pitches: Bool = true) -> String {
+        var lines = [version]
+        if let master { lines.append("% -*- master: \(master);") }
+        if pitches && language != .nederlands { lines.append("\\language \"\(language.rawValue)\"") }
+        return lines.joined(separator: "\n") + "\n"
     }
 
-    private static func music(_ instrument: Instrument, version: String, main: String) -> String {
-        var text = "\(version)\n% -*- master: ../\(main);\n\n"
-        switch instrument.kind {
-        case .piano:
-            text += """
-                pianoRight = \\relative c'' {
-                  \\global
-                  \\clef treble
-                  R1*4 |
-                }
+    private func score() -> String {
+        var text = top(master: nil)
+        let column = max(main.count + 2, 20)
+        func row(_ file: String, _ what: String) -> String {
+            "%   \(file.padding(toLength: column, withPad: " ", startingAt: 0))\(what)\n"
+        }
+        text += "\n% \(title): the full score. Engrave this file for the score.\n%\n"
+        text += row(main, "this file: puts the score together")
+        text += row("header.ily", spec.hasParts ? "titles, shared with the parts" : "titles")
+        text += row("style.ily", spec.hasParts ? "page format and layout, shared with the parts" : "page format and layout")
+        text += row("music/global.ily", "key, time signature, tempo and rehearsal marks")
+        text += row("music/<player>.ily", "the music, one file per player")
+        if spec.hasParts { text += row("parts/<player>.ly", "one part per player") }
+        text += """
+            %
+            % The .ily files name this file as their master, so engraving any of
+            % them in Frescobaldi engraves the score.
 
-                pianoLeft = \\relative c {
-                  \\global
-                  \\clef bass
-                  R1*4 |
-                }
+            """
+        if let note = transpositionNote { text += note }
+        text += "\n#(set-global-staff-size \(spec.effectiveScoreStaffSize))\n"
+        text += includes(prefix: "", players: players)
+        text += "\nfullScore = <<\n"
+        for group in groups {
+            text += staves(group, indent: 2)
+        }
+        text += ">>\n\n\\score {\n  \\fullScore\n"
+        if spec.effectiveHideEmptyStaves {
+            text += """
+                  \\layout {
+                    % Staves with nothing but rests are left out after the first system.
+                    \\context { \\Staff \\RemoveEmptyStaves }
+                  }
 
                 """
-        case .voice:
-            text += """
-                \(instrument.variable) = \\relative \(instrument.relative) {
-                  \\global
-                  \\clef "\(instrument.clef)"
-                  R1*4 |
-                }
-
-                \(instrument.variable)Words = \\lyricmode {
-
-                }
-
-                """
-        case .single:
-            if let transposition = instrument.transposition {
+        } else {
+            text += "  \\layout { }\n"
+        }
+        text += "}\n"
+        if spec.midi {
+            text += "\n% The MIDI file, with repeats played out.\n\\score {\n  \\unfoldRepeats \\fullScore\n"
+            if midiStaves > 15 {
+                // MIDI has 16 channels; by default each staff takes one.
                 text += """
-                    % \(instrument.name), at written pitch (as the player reads it):
-                    % \\transposition makes the MIDI sound right, and the key
-                    % signature is transposed from the concert key in \\global.
-                    \(instrument.variable) = \\relative \(instrument.relative) {
-                      \\transposition \(transposition)
-                      \\transpose \(transposition) c' \\global
-                      \\clef "\(instrument.clef)"
-                      R1*4 |
-                    }
+                      \\midi {
+                        % One MIDI channel per instrument, as there are more than 15 staves.
+                        \\context { \\Score midiChannelMapping = #'instrument }
+                      }
 
                     """
             } else {
-                text += """
-                    \(instrument.variable) = \\relative \(instrument.relative) {
-                      \\global
-                      \\clef "\(instrument.clef)"
-                      R1*4 |
-                    }
-
-                    """
+                text += "  \\midi { }\n"
             }
+            text += "}\n"
         }
         return text
     }
 
-    private static func part(_ instrument: Instrument, version: String, title: String) -> String {
-        var text = """
-            \(version)
-
-            % The \(instrument.name) part. The music is in ../music/\(instrument.file).ily.
-            \\include "../style.ily"
-            \\include "../music/global.ily"
-            \\include "../music/\(instrument.file).ily"
-
-            \\header {
-              title = "\(title)"
-              instrument = "\(instrument.name)"
+    /// Staves that play in the MIDI file.
+    private var midiStaves: Int {
+        players.reduce(0) { count, player in
+            switch player.instrument.kind {
+            case .grand: count + 2
+            case .organ: count + 3
+            case .chordNames: count
+            default: count + 1
             }
-
-            \\score {
-
-            """
-        switch instrument.kind {
-        case .piano:
-            text += """
-                  \\new PianoStaff <<
-                    \\new Staff = "right" \\pianoRight
-                    \\new Staff = "left" \\pianoLeft
-                  >>
-
-                """
-        case .voice:
-            text += """
-                  <<
-                    \\new Staff \\new Voice = "\(instrument.variable)" \\\(instrument.variable)
-                    \\new Lyrics \\lyricsto "\(instrument.variable)" \\\(instrument.variable)Words
-                  >>
-
-                """
-        case .single:
-            text += "  \\new Staff \\with { midiInstrument = \"\(instrument.midi)\" } \\compressMMRests \\\(instrument.variable)\n"
         }
-        text += """
-              \\layout { }
+    }
+
+    private var transpositionNote: String? {
+        guard players.contains(where: { $0.instrument.transposition != nil }) else { return nil }
+        if !spec.concertPitch {
+            return comment("""
+                Transposing instruments are entered as written (as the players read them); \\transposition \
+                in their music makes the MIDI sound right.
+                """)
+        }
+        let shown = spec.transposedScore
+            ? "The score and the parts show them as written."
+            : "The parts show them as written, the score as they sound (a score in C)."
+        var note = comment("""
+            Transposing instruments (clarinets, horns, saxophones …) are entered at concert pitch, as \
+            they sound. \(shown)
+            """)
+        if players.contains(where: { $0.instrument.transposesByOctave }) {
+            note += comment("Octave transpositions (piccolo, double bass …) are entered as written.")
+        }
+        return note
+    }
+
+    private func includes(prefix: String, players: [ResolvedPlayer]) -> String {
+        var text = """
+            \\include "\(prefix)style.ily"
+            \\include "\(prefix)header.ily"
+            \\include "\(prefix)music/global.ily"
+
+            """
+        for player in players { text += "\\include \"\(prefix)music/\(player.file).ily\"\n" }
+        return text
+    }
+
+    private func header() -> String {
+        var text = top(master: main, pitches: false)
+        text += "\n% Titles, shared by the score and the parts.\n\\header {\n"
+        let fields = [("title", title), ("subtitle", spec.subtitle), ("dedication", spec.dedication),
+                      ("composer", spec.composer), ("arranger", spec.arranger), ("poet", spec.poet),
+                      ("opus", spec.opus), ("copyright", spec.copyright)]
+        for (field, value) in fields {
+            let value = value.trimmingCharacters(in: .whitespaces)
+            // An empty composer shows where it goes.
+            if !value.isEmpty || field == "composer" { text += "  \(field) = \(quoted(value))\n" }
+        }
+        if !spec.tagline { text += "  tagline = ##f\n" }
+        return text + "}\n"
+    }
+
+    private func style() -> String {
+        let paper = spec.paperSize + (spec.landscape ? "landscape" : "")
+        return top(master: main, pitches: false) + """
+
+            % Page format and layout, shared by the score and the parts. The staff
+            % size is set in each of them, before they include this file.
+            \\paper {
+              #(set-paper-size \(quoted(paper)))
+            }
+
+            \\layout {
+              % Settings for the score and every part, for example:
+              % \\context { \\Score \\override BarNumber.break-visibility = ##(#f #t #t) }
             }
 
             """
+    }
+
+    private func global() -> String {
+        var text = top(master: "../\(main)")
+        text += """
+
+            % The structure every player shares: key, time signature, tempo, and the
+            % bars as skips. Put rehearsal marks, key and time changes and double
+            % bar lines here, at their bar, and every staff gets them.
+            global = {
+
+            """
+        text += "  \\key \(spec.key.tonic.name(in: language, octaveMarks: false)) \\\(spec.key.mode.rawValue)\n"
+        if spec.time.hasSymbol && !spec.time.symbol { text += "  \\numericTimeSignature\n" }
+        text += "  \\time \(spec.time.numerator)/\(spec.time.denominator)\n"
+        if let tempo = tempoCommand { text += "  \(tempo)\n" }
+        if let pickup = spec.pickup { text += "  \\partial \(pickup) s\(pickup) |\n" }
+        text += "  s\(bars) |\n}\n"
         return text
+    }
+
+    private var tempoCommand: String? {
+        let words = spec.tempo.text.trimmingCharacters(in: .whitespaces)
+        var parts: [String] = []
+        if !words.isEmpty { parts.append(quoted(words)) }
+        if let beat = spec.tempo.beat { parts.append("\(beat) = \(spec.tempo.bpm)") }
+        return parts.isEmpty ? nil : "\\tempo " + parts.joined(separator: " ")
+    }
+
+    /// "1*4": the empty bars, for rests and skips.
+    private var bars: String {
+        spec.time.barDuration + (spec.bars > 1 ? "*\(spec.bars)" : "")
+    }
+
+    private func music(_ player: ResolvedPlayer) -> String {
+        let instrument = player.instrument
+        var text = top(master: "../\(main)") + "\n"
+        if let note = musicNote(player) { text += note }
+        switch instrument.kind {
+        case .grand:
+            text += variable(player.variable + "Right", clef: "treble", start: instrument.startPitch, player: player)
+            text += "\n" + variable(player.variable + "Left", clef: "bass", start: Pitch(0), player: player)
+        case .organ:
+            text += variable(player.variable + "Right", clef: "treble", start: instrument.startPitch, player: player)
+            text += "\n" + variable(player.variable + "Left", clef: "bass", start: Pitch(0), player: player)
+            text += "\n" + variable(player.variable + "Pedal", clef: "bass", start: Pitch(0), player: player)
+        case .voice:
+            text += variable(player.variable, clef: instrument.clef, start: instrument.startPitch, player: player)
+            text += "\n\(player.variable)Words = \\lyricmode {\n\n}\n"
+        case .drums, .percussion:
+            text += "\(player.variable) = \\drummode {\n\(placeholder(rest: "r", multi: "R"))}\n"
+        case .chordNames:
+            text += "\(player.variable) = \\chordmode {\n\(placeholder(rest: "s", multi: "s"))}\n"
+        case .tablature:
+            // The clef is set on the staff, so the tablature keeps its own.
+            text += variable(player.variable, clef: nil, start: instrument.startPitch, player: player)
+        case .single:
+            text += variable(player.variable, clef: instrument.clef, start: instrument.startPitch, player: player)
+        }
+        return text
+    }
+
+    private func musicNote(_ player: ResolvedPlayer) -> String? {
+        let instrument = player.instrument
+        guard instrument.transposition != nil else { return nil }
+        if instrument.transposesByOctave || !spec.concertPitch {
+            return comment("\(player.name), entered as written; \\transposition makes the MIDI sound right.") + "\n"
+        }
+        let shown = spec.transposedScore ? "The score and the part show" : "The part shows"
+        return comment("\(player.name), entered at concert pitch (as it sounds). \(shown) it as written.") + "\n"
+    }
+
+    /// `name = \relative c'' { … }` with a clef and the empty bars.
+    private func variable(_ name: String, clef: String?, start: Pitch, player: ResolvedPlayer) -> String {
+        let opening: String
+        switch spec.entry {
+        case .relative: opening = "\\relative \(start.name(in: language)) {"
+        case .fixed: opening = "\\fixed \(start.name(in: language)) {"
+        case .absolute: opening = "{"
+        }
+        var text = "\(name) = \(opening)\n"
+        let instrument = player.instrument
+        if instrument.transposesByOctave || (instrument.transposesKey && !spec.concertPitch),
+           let transposition = instrument.transposition {
+            text += "  \\transposition \(transposition.name(in: language))\n"
+        }
+        if let clef { text += "  \\clef \(clefName(clef))\n" }
+        return text + placeholder(rest: "r", multi: "R") + "}\n"
+    }
+
+    private func placeholder(rest: String, multi: String) -> String {
+        var text = ""
+        if let pickup = spec.pickup { text += "  \(rest)\(pickup) |\n" }
+        return text + "  \(multi)\(bars) |\n"
+    }
+
+    private func clefName(_ clef: String) -> String {
+        clef.allSatisfy(\.isLetter) ? clef : quoted(clef)
+    }
+
+    private func part(_ player: ResolvedPlayer) -> String {
+        var text = top(master: nil)
+        text += "\n% The \(player.name) part. The music is in ../music/\(player.file).ily.\n\n"
+        text += "#(set-global-staff-size \(spec.partStaffSize))\n"
+        text += includes(prefix: "../", players: [player])
+        text += "\n\\header {\n  instrument = \(markup(player.name))\n}\n\n"
+        text += "\\score {\n  \\compressMMRests <<\n"
+        text += staff(player, indent: 4, inScore: false, written: true)
+        text += "  >>\n  \\layout { }\n}\n"
+        return text
+    }
+
+    // MARK: The score's staves
+
+    private enum Group {
+        case player(ResolvedPlayer)
+        case bracket(choir: Bool, [ResolvedPlayer])
+    }
+
+    private var groups: [Group] {
+        let staffed = players
+        switch spec.grouping {
+        case .none:
+            return staffed.map { .player($0) }
+        case .together:
+            guard staffed.filter({ $0.instrument.isPlayed }).count > 1 else { return staffed.map { .player($0) } }
+            return [.bracket(choir: staffed.allSatisfy { $0.instrument.family == .voices }, staffed)]
+        case .byFamily:
+            var groups: [Group] = []
+            var run: [ResolvedPlayer] = []
+            func flush() {
+                if run.count > 1 {
+                    groups.append(.bracket(choir: run[0].instrument.family == .voices, run))
+                } else {
+                    groups += run.map { .player($0) }
+                }
+                run = []
+            }
+            for player in staffed {
+                let family = player.instrument.family
+                let groupable = family != .keyboards && family != .other
+                if !groupable || run.first.map({ $0.instrument.family != family }) == true { flush() }
+                if groupable { run.append(player) } else { groups.append(.player(player)) }
+            }
+            flush()
+            return groups
+        }
+    }
+
+    private func staves(_ group: Group, indent: Int) -> String {
+        let pad = String(repeating: " ", count: indent)
+        switch group {
+        case .player(let player):
+            return staff(player, indent: indent, inScore: true, written: spec.transposedScore)
+        case .bracket(let choir, let players):
+            var text = "\(pad)\\new \(choir ? "ChoirStaff" : "StaffGroup") <<\n"
+            for player in players { text += staff(player, indent: indent + 2, inScore: true, written: spec.transposedScore) }
+            return text + "\(pad)>>\n"
+        }
+    }
+
+    /// The staff (or staves) of a player; in the score with names and MIDI
+    /// sounds. `written`: transposing instruments as written; otherwise as
+    /// they sound, but for octave transpositions.
+    private func staff(_ player: ResolvedPlayer, indent: Int, inScore: Bool, written: Bool) -> String {
+        let pad = String(repeating: " ", count: indent)
+        let instrument = player.instrument
+        let v = player.variable
+        var properties: [String] = []
+        if inScore && spec.instrumentNames != .none {
+            properties.append("instrumentName = \(markup(player.name))")
+            if spec.instrumentNames == .fullThenShort {
+                properties.append("shortInstrumentName = \(markup(player.shortName))")
+            }
+        }
+        let midi = inScore ? ["midiInstrument = \(quoted(instrument.midi))"] : []
+
+        switch instrument.kind {
+        case .grand, .organ:
+            let ids = keyboards > 1 ? (v + "Right", v + "Left", v + "Pedal") : ("right", "left", "pedal")
+            var text = "\(pad)\\new PianoStaff\(with(properties, pad))<<\n"
+            text += "\(pad)  \\new Staff = \"\(ids.0)\"\(inline(midi))<< \\global \\\(v)Right >>\n"
+            text += "\(pad)  \\new Staff = \"\(ids.1)\"\(inline(midi))<< \\global \\\(v)Left >>\n"
+            text += "\(pad)>>\n"
+            if instrument.kind == .organ {
+                text += "\(pad)\\new Staff = \"\(ids.2)\"\(inline(midi))<< \\global \\\(v)Pedal >>\n"
+            }
+            return text
+        case .voice:
+            return "\(pad)\\new Staff\(with(properties + midi, pad))\\new Voice = \"\(v)\" << \\global \\\(v) >>\n"
+                + "\(pad)\\new Lyrics \\lyricsto \"\(v)\" \\\(v)Words\n"
+        case .drums:
+            return "\(pad)\\new DrumStaff\(with(properties, pad))<< \\global \\\(v) >>\n"
+        case .percussion:
+            let percussion = ["drumStyleTable = #percussion-style", "\\override StaffSymbol.line-count = #1"]
+            return "\(pad)\\new DrumStaff\(with(percussion + properties, pad))<< \\global \\\(v) >>\n"
+        case .chordNames:
+            return "\(pad)\\new ChordNames \\\(v)\n"
+        case .tablature:
+            var text = "\(pad)\\new StaffGroup\(with(properties, pad))<<\n"
+            text += "\(pad)  \\new Staff\(inline(midi)){ \\clef \(clefName(instrument.clef)) << \\global \\\(v) >> }\n"
+            text += "\(pad)  \\new TabStaff \\with { \\remove \"Staff_performer\" } << \\global \\\(v) >>\n"
+            return text + "\(pad)>>\n"
+        case .single:
+            return "\(pad)\\new Staff\(with(properties + midi, pad))\(transposed(player, written: written))\n"
+        }
+    }
+
+    /// The music of a one-staff player, transposed for the staff.
+    private func transposed(_ player: ResolvedPlayer, written: Bool) -> String {
+        let instrument = player.instrument
+        let music = "<< \\global \\\(player.variable) >>"
+        guard instrument.transposesKey, let transposition = instrument.transposition else { return music }
+        if !spec.concertPitch {
+            // Entered as written; only the key from \global needs transposing.
+            return "<< \\transpose \(name(spelled(transposition))) \(name(.middleC)) \\global \\\(player.variable) >>"
+        }
+        // Entered at concert pitch: transpose the staff, and tell the MIDI how
+        // the shown notes sound.
+        var shown = transposition
+        if !written {
+            // A score in C keeps the octave of the transposition (tenor saxophone).
+            let octaves = Int((Double(transposition.semitones) / 12).rounded(.towardZero))
+            shown = Pitch(0, octave: 1 + octaves)
+            if shown == .middleC { return music }
+        }
+        let from = shown.fifths == 0 ? shown : spelled(shown)
+        return "{ \\transposition \(name(shown)) \\transpose \(name(from)) \(name(.middleC)) \(music) }"
+    }
+
+    /// The transposition spelled so the written key has at most six sharps or
+    /// flats: a B♭ clarinet in concert B major reads D♭ major, not C♯ major.
+    private func spelled(_ transposition: Pitch) -> Pitch {
+        let written = spec.key.fifths - transposition.fifths
+        if written > 6 { return .at(fifths: transposition.fifths + 12, near: transposition) }
+        if written < -6 { return .at(fifths: transposition.fifths - 12, near: transposition) }
+        return transposition
+    }
+
+    private func name(_ pitch: Pitch) -> String { pitch.name(in: language) }
+
+    /// ` \with { … } ` on one line, or a space if there's nothing.
+    private func inline(_ properties: [String]) -> String {
+        properties.isEmpty ? " " : " \\with { \(properties.joined(separator: " ")) } "
+    }
+
+    /// ` \with { … } ` on separate lines, or a space if there's nothing.
+    private func with(_ properties: [String], _ pad: String) -> String {
+        guard !properties.isEmpty else { return " " }
+        return " \\with {\n" + properties.map { "\(pad)  \($0)\n" }.joined() + "\(pad)} "
+    }
+
+    // MARK: Strings
+
+    /// `text` as comment lines of at most 76 characters.
+    private func comment(_ text: String) -> String {
+        var lines: [String] = []
+        var line = "%"
+        for word in text.split(separator: " ") {
+            if line.count + 1 + word.count > 76 && line != "%" {
+                lines.append(line)
+                line = "%"
+            }
+            line += " " + word
+        }
+        lines.append(line)
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func quoted(_ text: String) -> String {
+        "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    /// A string, or a markup with LilyPond's own flat and sharp signs
+    /// ("Clarinet in B♭").
+    private func markup(_ text: String) -> String {
+        guard text.contains(where: { $0 == "♭" || $0 == "♯" }) else { return quoted(text) }
+        var pieces: [String] = []
+        var run = ""
+        for character in text {
+            if character == "♭" || character == "♯" {
+                if !run.isEmpty { pieces.append(quoted(run)) }
+                run = ""
+                pieces.append("\\hspace #0.2 \\fontsize #-2 \\raise #0.5 \\\(character == "♭" ? "flat" : "sharp")")
+            } else {
+                run.append(character)
+            }
+        }
+        if !run.isEmpty { pieces.append(quoted(run)) }
+        return "\\markup \\concat { \(pieces.joined(separator: " ")) }"
     }
 }

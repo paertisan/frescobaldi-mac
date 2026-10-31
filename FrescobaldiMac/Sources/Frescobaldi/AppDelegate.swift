@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canCreateDirectories = true
 
         let ensembles = NSPopUpButton(frame: .zero, pullsDown: false)
-        ensembles.addItems(withTitles: ProjectTemplate.Ensemble.allCases.map(\.title))
+        ensembles.addItems(withTitles: Ensemble.all.map(\.title))
         let label = NSTextField(labelWithString: "Instruments:")
         let accessory = NSStackView(views: [label, ensembles])
         accessory.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
@@ -76,12 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         panel.begin { [weak self] response in
             guard response == .OK, let folder = panel.url else { return }
-            let ensemble = ProjectTemplate.Ensemble.allCases[max(0, ensembles.indexOfSelectedItem)]
+            let ensemble = Ensemble.all[max(0, ensembles.indexOfSelectedItem)]
             self?.createProject(at: folder, ensemble: ensemble)
         }
     }
 
-    private func createProject(at folder: URL, ensemble: ProjectTemplate.Ensemble) {
+    private func createProject(at folder: URL, ensemble: Ensemble) {
         let fm = FileManager.default
         do {
             if fm.fileExists(atPath: folder.path) {
@@ -94,16 +94,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
             let title = folder.lastPathComponent
-            let paperSize = Locale.current.measurementSystem == .us ? "letter" : "a4"
-            for (path, contents) in ProjectTemplate.files(title: title, ensemble: ensemble, version: lilypondVersion,
-                                                         paperSize: paperSize) {
+            var spec = ScoreSpec(ensemble: ensemble)
+            spec.paperSize = Locale.current.measurementSystem == .us ? "letter" : "a4"
+            for (path, contents) in ProjectTemplate.files(for: spec, name: title, version: lilypondVersion) {
                 let url = folder.appendingPathComponent(path)
                 try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try Data(contents.utf8).write(to: url, options: .withoutOverwriting)
             }
             // Show the new project's files.
             UserDefaults.standard.set("project", forKey: "sidebarMode")
-            let main = folder.appendingPathComponent(ProjectTemplate.mainFileName(title: title))
+            let main = folder.appendingPathComponent(ProjectTemplate.mainFileName(name: title))
             NSDocumentController.shared.openDocument(withContentsOf: main, display: true) { _, _, error in
                 if let error { NSApp.presentError(error) }
             }
