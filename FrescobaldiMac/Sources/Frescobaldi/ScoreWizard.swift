@@ -277,9 +277,9 @@ struct ScoreWizardView: View {
                 Spacer()
                 Button("Back") { move(-1) }
                     .disabled(model.step == .ensemble)
+                // Not on Return, which finishes typing a name or title.
                 if model.step != .layout {
                     Button("Next") { move(1) }
-                        .keyboardShortcut(.defaultAction)
                 }
                 Button("Create…") { model.onCreate() }
                     .keyboardShortcut(model.step == .layout ? .defaultAction : nil)
