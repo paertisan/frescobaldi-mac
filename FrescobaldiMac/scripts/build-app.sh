@@ -54,6 +54,15 @@ cp -R "$BUILD/python/ly" "$APP/Contents/Resources/python/ly"
 [[ -f "$BUILD/python/LICENSE-python-ly" ]] && cp "$BUILD/python/LICENSE-python-ly" "$APP/Contents/Resources/python/"
 cp "$ROOT/../frescobaldi/icons/org.frescobaldi.Frescobaldi.icns" "$APP/Contents/Resources/Frescobaldi.icns"
 cp "$ROOT/../LICENSE" "$APP/Contents/Resources/LICENSE"
+# The app's accent color (Resources/Assets.xcassets, NSAccentColorName),
+# compiled by Xcode's actool. Without it the system accent is used.
+if xcrun --find actool >/dev/null 2>&1; then
+    xcrun actool "$ROOT/Resources/Assets.xcassets" --compile "$APP/Contents/Resources" \
+        --platform macosx --minimum-deployment-target 14.0 \
+        --output-partial-info-plist "$BUILD/assets-info.plist" >/dev/null
+else
+    echo "warning: actool not found (it comes with Xcode); using the system accent color" >&2
+fi
 find "$APP" -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP" -name '.DS_Store' -delete
 

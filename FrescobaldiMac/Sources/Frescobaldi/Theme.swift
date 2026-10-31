@@ -28,6 +28,9 @@ struct EditorTheme: Identifiable {
     /// PDF. Nil keeps the system's colors.
     let chrome: NSColor?
     let tokenColors: [LilyTokenKind: NSColor]
+    /// The one accent of the window's own controls (the active target, the
+    /// outline's markers). Nil keeps the system accent color.
+    var accent: NSColor? = nil
 
     /// Color for a token kind; nil means the plain text color.
     func color(for kind: LilyTokenKind) -> NSColor? { tokenColors[kind] }
@@ -52,8 +55,44 @@ extension EditorTheme {
     }
 
     static let builtIn: [EditorTheme] = [
-        everforest, everforestLight, nord, catppuccinFrappe, catppuccinLatte, monokai, system,
+        ivory, charcoal, everforest, everforestLight, nord, catppuccinFrappe, catppuccinLatte, monokai, system,
     ]
+
+    /// Ivory and Charcoal: warm neutrals with one clay accent, after the
+    /// quiet look of Claude's apps (its background, sidebar and text greys:
+    /// #FAF9F5 / #F5F4ED / #73726C light, #262624 / #1F1E1D / #9C9A92 dark).
+    /// The notes are the plainest text; LilyPond's commands and the rest
+    /// step back in a few muted colors.
+    private static func warm(id: String, name: String, dark: Bool, background: UInt32, chrome: UInt32,
+                             currentLine: UInt32, selection: UInt32, text: UInt32, muted: UInt32, faint: UInt32,
+                             clay: UInt32, accent: UInt32, green: UInt32, blue: UInt32, plum: UInt32,
+                             amber: UInt32) -> EditorTheme {
+        let muted = hex(muted), faint = hex(faint), clay = hex(clay), green = hex(green), blue = hex(blue)
+        let plum = hex(plum), amber = hex(amber)
+        return EditorTheme(
+            id: id, name: name, collection: "Built-in", isDark: dark, background: hex(background), foreground: hex(text),
+            insertionPoint: hex(accent), selection: hex(selection), selectionForeground: nil,
+            currentLine: hex(currentLine), gutterText: faint, gutterCurrentText: muted, gutterBackground: nil,
+            chrome: hex(chrome),
+            tokenColors: [
+                .comment: muted, .string: green, .keyword: clay, .command: clay,
+                .dynamic: amber, .articulation: amber, .spanner: muted,
+                .rest: muted, .duration: plum, .number: plum, .scheme: plum,
+                .delimiter: muted, .barCheck: faint, .variable: blue,
+                .contextName: blue, .property: blue, .markupText: green, .lyricText: green,
+            ],
+            accent: hex(accent))
+    }
+
+    static let ivory = warm(
+        id: "ivory", name: "Ivory", dark: false, background: 0xFAF9F5, chrome: 0xF5F4ED, currentLine: 0xF2F0E8,
+        selection: 0xF1D9CC, text: 0x141413, muted: 0x73726C, faint: 0x928F85, clay: 0xB0532F, accent: 0xC6613F,
+        green: 0x5A7140, blue: 0x3E6C9A, plum: 0x8A5577, amber: 0x96661C)
+
+    static let charcoal = warm(
+        id: "charcoal", name: "Charcoal", dark: true, background: 0x262624, chrome: 0x1F1E1D, currentLine: 0x2D2C29,
+        selection: 0x4A3C34, text: 0xF0EEE6, muted: 0x9C9A92, faint: 0x807D75, clay: 0xE08A68, accent: 0xD97757,
+        green: 0xA5B98A, blue: 0x8FB4DA, plum: 0xC79DC0, amber: 0xDDB56E)
 
     /// Everforest, medium contrast (sainnhe/everforest palette.md): "warm and
     /// soft in order to protect developers' eyes".
@@ -277,7 +316,7 @@ final class ThemeStore: ObservableObject {
 
     func resolve() -> EditorTheme {
         let id = systemIsDark ? Preferences.darkThemeID : Preferences.lightThemeID
-        return byID[id] ?? (systemIsDark ? .everforest : .everforestLight)
+        return byID[id] ?? (systemIsDark ? .charcoal : .ivory)
     }
 
     private func refresh() {
@@ -301,7 +340,9 @@ struct ThemedBackground: ViewModifier {
     var fallback: Color
 
     func body(content: Content) -> some View {
-        content.background(store.current.chrome.map { Color(nsColor: $0) } ?? fallback)
+        content
+            .background(store.current.chrome.map { Color(nsColor: $0) } ?? fallback)
+            .tint(store.current.accent.map { Color(nsColor: $0) })
     }
 }
 

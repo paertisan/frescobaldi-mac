@@ -19,8 +19,8 @@ enum Preferences {
     /// Cascadia Code if it's installed (it has coding ligatures; Cascadia Mono
     /// doesn't), otherwise the system's monospaced font.
     static let defaultFontName = "Cascadia Code"
-    static let defaultLightTheme = "everforest-light"
-    static let defaultDarkTheme = "everforest"
+    static let defaultLightTheme = "ivory"
+    static let defaultDarkTheme = "charcoal"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [

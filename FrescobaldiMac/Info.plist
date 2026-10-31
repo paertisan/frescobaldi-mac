@@ -10,6 +10,8 @@
 	<string>Frescobaldi</string>
 	<key>CFBundleIconFile</key>
 	<string>Frescobaldi</string>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.paertisan.frescobaldi</string>
 	<key>CFBundleInfoDictionaryVersion</key>
