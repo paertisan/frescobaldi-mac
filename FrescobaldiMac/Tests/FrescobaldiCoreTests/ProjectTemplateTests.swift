@@ -233,7 +233,13 @@ import Testing
         spec.players = ["piano", "organ", "guitar-tab", "guitar-tab", "drum-set", "marimba", "celesta"]
             .map { Player(instrument: $0) }
         spec.grouping = .together
-        cases.append(("keyboards and guitars together", spec))
+        spec.language = .english
+        spec.key = KeySignature(tonic: Pitch("cis")!, mode: .major)
+        cases.append(("keyboards and guitars together, C♯ major, English", spec))
+        spec = ScoreSpec(ensemble: Ensemble.named("clarinet-piano")!)
+        spec.key = KeySignature(tonic: Pitch("b")!, mode: .major)
+        spec.language = .english
+        cases.append(("clarinet in concert B major, English", spec))
         spec = ScoreSpec()
         spec.players = Instrument.all.map { Player(instrument: $0.id) }
         spec.paperSize = "tabloid"

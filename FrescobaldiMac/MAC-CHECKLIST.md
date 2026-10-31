@@ -138,11 +138,7 @@ sheet with absolute includes of a music font) and generated projects.
       line.
 - [x] ⌘R in `notes/floeten.ily` engraves `mahler9-I-p1-2.ly` ("Engraved
       mahler9-I-p1-2.ly in 8.6 s"); the existing PDF shows on open.
-- [x] New Project templates: all five ensembles engrave without errors or
-      warnings (tests), and a generated chamber-orchestra project engraves
-      from `music/clarinet.ily` with transposed key signatures.
-- [ ] The New Project panel itself up to Create (the automation tool
-      can't drive save panels); the panel opens with the ensemble menu.
+- New Project became New Score: see 2f.
 
 ## 2d. Targets, project settings and build commands
 
@@ -202,6 +198,35 @@ Not checked yet (from the same review):
       no notes sounding (upstream #1595).
 - [ ] Option-drag for a rectangular selection; Toggle Comment and Shift act
       on each line of it (upstream #1320).
+
+## 2f. New Score wizard
+
+Checked in dark and light mode.
+
+- [x] Tests: every preset and 7 option combinations engrave (score and every
+      part) with LilyPond 2.26, no errors or warnings; no project
+      suggestions; folders that exist and aren't empty are refused.
+- [x] MIDI of a concert-pitch B♭ clarinet playing C sounds C (72); entered
+      as written, a written C sounds B♭ (70).
+- [x] File > New Score… opens the window; presets fill the players
+      (String Quartet: Violin I, Violin II, Viola, Cello); the + menu adds
+      a piano by family in score order; renaming a player shows in the
+      preview.
+- [x] Key, time signature, tempo, metronome mark and empty bars update the
+      preview (A♭ major in 6/8 with the clarinet and horn transposed).
+- [x] The preview shows the start of the score and the whole page on click;
+      it follows each change after about a second for 12 staves.
+- [x] Save Ensemble… names a set; it shows under My Ensembles and choosing
+      it brings the players back.
+- [x] Return finishes a name without going to the next step.
+- [x] `new_score` through the bundled helper with the app running: a brass
+      quintet in B♭ major, 2/2, opens with the project sidebar (score and
+      five parts as targets) and engraves without issues.
+- [ ] Create… up to the end: the save panel opens with the title as the
+      project name, but the automation tool can't take it to a scratch
+      folder, so the files were written through `new_score` instead.
+- [ ] Very long player names ("Oboe and English Horn") run past the left
+      edge of the page; LilyPond doesn't widen the indent for them.
 
 ## 3. Things to look at closely
 

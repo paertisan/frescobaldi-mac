@@ -42,7 +42,7 @@ still open.
 | Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. rel2abs/abs2rel refuse music with `\resetRelativeOctave`, whose pitch python-ly reads as a note (upstream #930). The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
-| Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders), and New Project (see [Projects](#projects)) |
+| Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders), and the Score Wizard (see [New Score](#new-score)) |
 | Sidebar | Outline, or the project: include tree, folder and suggestions (see [Projects](#projects)) |
 | Claude (MCP) | `frescobaldi-mcp` helper: file tools, plus a Unix-socket bridge to open documents. See [below](#claude-and-other-ai-clients-mcp) |
 
@@ -76,6 +76,7 @@ restart Claude.
 | `transform` | The Tools menu via python-ly: transpose, translate pitch names, relative ↔ absolute, simplify accidentals, re-indent, reformat. On a file, text, or an open document (its selection, as one undo step) |
 | `outline` | `\version`, `\include`, variables, blocks and `%%` markers with line numbers |
 | `lilypond_info`, `templates` | The LilyPond in use (same setting as the app); the score templates with `\version` filled in |
+| `new_score` | Creates a project as File > New Score… does, from a preset ensemble or a list of instruments, with titles, key, time, tempo and layout options; returns the files and each player's music variables, and opens the score in the app if it's running |
 | `list_documents`, `get_document` | Open documents; text, selection and cursor, unsaved state, PDF, last engrave's issues |
 | `edit_document` | `old_text` → `new_text` replacements (each must match once) or a whole new text, applied as one change the user can undo ("Undo Claude Edit") |
 | `engrave_document` | ⌘R for an open document (saves first; its own target, or the one pinned in the target menu), waits and returns the issues |
@@ -154,11 +155,76 @@ a project dialog to fill in first:
   engrave, a main file without `\version`, problems in
   `frescobaldi.json`. Libraries the project uses don't get organization
   hints. Clicking a file opens it as a tab, at the line in question.
-- **New Project** (⌥⌘N) creates that layout for piano, voice and piano,
-  SATB choir, string quartet or chamber orchestra: `<name>.ly`,
-  `style.ily`, `music/global.ily`, `music/<part>.ily` and `parts/<part>.ly`.
-  Every `.ily` names the score as its master; transposing instruments are
-  written at written pitch with `\transposition`.
+- **New Score** (⌥⌘N) creates that layout for any ensemble: see below.
+
+## New Score
+
+File > New Score… (⌥⌘N) sets up a project to start entering music in.
+It has four steps, with the start of the score engraved beside them as
+you go (click it for the whole page). Create… works from any step and
+asks where to put the project folder.
+
+- **Ensemble.** 24 presets (solo and duo, chamber music, choir, orchestra
+  and band, songs and bands), or any players from 58 instruments in the +
+  menu ([#289](https://github.com/frescobaldi/frescobaldi/issues/289),
+  [#2196](https://github.com/frescobaldi/frescobaldi/issues/2196)). New
+  players go in score order; drag to reorder, click a name to rename one
+  ("Solo Violin"). Several of one instrument are numbered as scores do:
+  Violin I and II, Horn 1 and 2 in F. Brackets go by family, around
+  everything, or nowhere. Save Ensemble… keeps a set of players under My
+  Ensembles.
+- **Music.** Key and mode, time signature (C and ¢, or numbers), pickup,
+  empty bars to start with
+  ([#1313](https://github.com/frescobaldi/frescobaldi/issues/1313)), tempo
+  words and metronome mark, pitch names (`\language`), octave entry
+  (`\relative`, `\fixed` or absolute), and for transposing instruments,
+  concert or written pitch and a transposed score or one in C.
+- **Titles.** Title, subtitle, dedication, composer, arranger, poet, opus,
+  copyright; LilyPond's tagline is off unless you want it.
+- **Layout.** Paper size and orientation
+  ([#1142](https://github.com/frescobaldi/frescobaldi/issues/1142)), staff
+  size of the score (by default 20 down to 12, by the number of staves)
+  and of the parts, instrument names, hiding staves with only rests after
+  the first system, MIDI, parts.
+
+The wizard remembers the composer, pitch names, entry mode, paper and the
+last ensemble. What it writes:
+
+```text
+serenade/
+  serenade.ly          the score: engrave this
+  header.ily           titles, shared by the score and the parts
+  style.ily            paper and layout, shared by the score and the parts
+  music/global.ily     key, time, tempo, and the bars as skips
+  music/flute.ily      the music, one file per player
+  parts/flute.ly       one part per player
+```
+
+- A player's music is in one file that the score and the part both use,
+  so a correction reaches both.
+- `\global` runs alongside each player's music (`<< \global \flute >>`)
+  and holds the bars as skips, so rehearsal marks, key changes and double
+  bar lines are written once, at their bar.
+- Transposing instruments are entered at concert pitch: you write what
+  sounds, and the score and parts show what the players read
+  (`\transposition` and `\transpose`). The key is spelled so that no part
+  gets more than six sharps or flats: a B♭ clarinet in concert B major
+  reads D♭ major. Octave transpositions (piccolo, double bass,
+  glockenspiel) are entered as written, as every score prints them.
+  Entering as written and a score in C are options; a score in C keeps
+  octave transpositions, so a tenor saxophone stays in the treble clef.
+- The MIDI file comes from a second `\score` with `\unfoldRepeats`, so
+  repeats play. Above 15 staves it uses one MIDI channel per instrument
+  rather than per staff (MIDI has 16).
+- Every `.ily` names the score as its master, so ⌘R in any of them
+  engraves the score; each part is a target of its own.
+
+Every preset and a set of option combinations (all six pitch-name
+languages, keys from D♭ major to C♯ major, 5/4 and 7/8, pickups, both
+entry modes, a score in C) engrave with LilyPond 2.26 without errors or
+warnings, score and parts (`ProjectTemplateTests`). Blank staff paper
+([#1139](https://github.com/frescobaldi/frescobaldi/issues/1139)) was
+already a template: File > New from Template > Blank Music Paper.
 
 ## Themes
 
@@ -239,9 +305,9 @@ target is macOS-only in `Package.swift`.
 
 | Path | What |
 |---|---|
-| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `ProjectTemplate` |
-| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge` |
-| `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport` |
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`) |
+| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge`, `ScoreWizard` (+ `ScoreWizardPreview`) |
+| `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport`, `NewScore` (`new_score` arguments) |
 | `Sources/frescobaldi-mcp` | The helper's `main.swift` |
 | `Resources` | Templates, themes (`Themes/rainglow.json` + license) and the python-ly driver, copied into the bundle |
 | `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
@@ -251,7 +317,7 @@ SPM resource bundles aren't used, because they break app-bundle signing.
 
 ## Roadmap after the MVP
 
-Score Wizard, snippets/quick insert, bracket matching, document-wide
+Snippets/quick insert, bracket matching, document-wide
 transpose with context, MusicXML import (`musicxml2ly`), multiple-PDF picker,
 dark "paper" option, notarized DMG.
 
