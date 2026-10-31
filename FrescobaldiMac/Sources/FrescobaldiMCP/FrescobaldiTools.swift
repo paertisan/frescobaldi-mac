@@ -19,6 +19,8 @@ public enum FrescobaldiTools {
         then render_page to look at the result.
         - Pitches for transpose are Dutch names with octave marks (c, cis, bes, d'), \
         whatever language the document uses.
+        - A new piece: new_score creates a project folder (score, parts, one music file \
+        per player) like File > New Score…; then write the music into music/<player>.ily.
         """
 
     public static func all(environment: FrescobaldiEnvironment = .detect(),
@@ -110,6 +112,19 @@ public enum FrescobaldiTools {
                     inputSchema: schema(["name": string("Template name from the list.")]),
                     annotations: MCPToolAnnotations(readOnly: true),
                     run: { try await context.templates($0) }),
+            MCPTool(name: "new_score", title: "New Score Project",
+                    description: """
+                        Create a LilyPond project folder ready for entering music, as File > New Score… \
+                        does: <name>.ly (the score: engrave this), header.ily (titles), style.ily (paper), \
+                        music/global.ily (key, time, tempo; rehearsal marks and key changes go here, as \
+                        skips), one music/<player>.ily per player with empty bars to replace, and \
+                        parts/<player>.ly. Give `ensemble` or `instruments`. Transposing instruments are \
+                        entered at concert pitch unless concert_pitch is false. Returns the files and each \
+                        player's music variable; the score opens in Frescobaldi if it's running.
+                        """,
+                    inputSchema: NewScoreArguments.schema,
+                    annotations: MCPToolAnnotations(readOnly: false),
+                    run: { try await context.newScore($0) }),
 
             // The running app
             MCPTool(name: "list_documents", title: "List Open Scores",
@@ -374,6 +389,39 @@ private struct Context: Sendable {
             "version": JSONValue(version?.description),
             "architectures": JSONValue(architectures.map(\.rawValue)),
             "setting": .string(environment.lilypondSetting.isEmpty ? "automatic" : environment.lilypondSetting),
+        ])
+    }
+
+    func newScore(_ arguments: JSONValue) async throws -> MCPToolResult {
+        guard let path = arguments["path"]?.string, !path.isEmpty else {
+            throw MCPToolError("Give `path`: the project folder to create.")
+        }
+        let folder = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        let spec = try NewScoreArguments.spec(arguments)
+        let version = await blockingValue { environment.lilypond().flatMap(LilyPondLocator.version(of:)) }
+        let main = try ProjectTemplate.write(spec, to: folder, version: version)
+        let files = ProjectTemplate.files(for: spec, name: folder.lastPathComponent, version: version).map(\.path)
+        var opened = false
+        if arguments["open"]?.bool != false {
+            opened = (try? await callBridge("openDocument", ["path": .string(main.path), "project": true])) != nil
+        }
+        let players: [JSONValue] = spec.resolvedPlayers.map { player in
+            var variables = [player.variable]
+            switch player.instrument.kind {
+            case .grand: variables = [player.variable + "Right", player.variable + "Left"]
+            case .organ: variables = ["Right", "Left", "Pedal"].map { player.variable + $0 }
+            case .voice: variables.append(player.variable + "Words")
+            default: break
+            }
+            return ["name": .string(player.name), "file": .string("music/\(player.file).ily"),
+                    "variables": JSONValue(variables)]
+        }
+        return .json([
+            "score": .string(main.path),
+            "folder": .string(folder.path),
+            "files": JSONValue(files),
+            "players": .array(players),
+            "opened": .bool(opened),
         ])
     }
 

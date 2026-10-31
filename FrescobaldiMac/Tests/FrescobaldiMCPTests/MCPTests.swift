@@ -241,6 +241,56 @@ private func text(_ result: JSONValue) -> String {
         #expect(unused["isError"] == true && text(unused).contains("makes no output by itself"))
     }
 
+    @Test func newScore() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let server = server(environment())
+        let folder = dir.appendingPathComponent("Night Music")
+        let result = try JSONValue.parse(text(try await call(server, "new_score", [
+            "path": .string(folder.path), "ensemble": "string-quartet", "instruments": ["clarinet", "violin", "violin", "viola", "cello"],
+            "names": ["", "Violin Solo"], "title": "Nachtmusik", "key": "Eb major", "time": "6/8", "pickup": "8",
+            "metronome": "4. = 60", "language": "english", "open": false,
+        ])))
+        #expect(result["score"]?.string?.hasSuffix("Night Music/night-music.ly") == true)
+        #expect(result["opened"] == false)
+        #expect(result["files"]?.array?.contains("parts/clarinet.ly") == true)
+        #expect(result["players"]?.array?.first?["variables"] == ["clarinet"])
+        #expect(result["players"]?.array?[1]["name"] == "Violin Solo")
+        let global = try String(contentsOf: folder.appendingPathComponent("music/global.ily"), encoding: .utf8)
+        #expect(global.contains("\\key ef \\major") && global.contains("\\time 6/8") && global.contains("\\tempo 4. = 60"))
+        #expect(global.contains("\\partial 8 s8 |"))
+        let header = try String(contentsOf: folder.appendingPathComponent("header.ily"), encoding: .utf8)
+        #expect(header.contains("title = \"Nachtmusik\""))
+
+        // The folder exists now; bad arguments say what's wrong.
+        let exists = try await call(server, "new_score", ["path": .string(folder.path), "ensemble": "piano"])
+        #expect(exists["isError"] == true && text(exists).contains("isn't empty"))
+        let other = dir.appendingPathComponent("Other").path
+        for (arguments, message) in [
+            (["path": .string(other)], "ensemble"),
+            (["path": .string(other), "instruments": ["kazoo"]], "kazoo"),
+            (["path": .string(other), "ensemble": "piano", "key": "h major"], "note name"),
+            (["path": .string(other), "ensemble": "piano", "time": "3/5"], "time signature"),
+            (["path": .string(other), "ensemble": "piano", "time": "3/8", "pickup": "4."], "doesn't fit"),
+            (["path": .string(other), "ensemble": "piano", "metronome": "fast"], "metronome"),
+        ] as [(JSONValue, String)] {
+            let failed = try await call(server, "new_score", arguments)
+            #expect(failed["isError"] == true && text(failed).contains(message), "\(arguments): \(text(failed))")
+        }
+        #expect(!FileManager.default.fileExists(atPath: other))
+    }
+
+    @Test func newScoreKeysAndTimes() throws {
+        #expect(try NewScoreArguments.key("fis minor") == KeySignature(tonic: Pitch("fis")!, mode: .minor))
+        #expect(try NewScoreArguments.key("B♭ major") == KeySignature(tonic: Pitch("bes")!, mode: .major))
+        #expect(try NewScoreArguments.key("d aeolian").mode == .minor)
+        #expect(try NewScoreArguments.key("G") == KeySignature(tonic: Pitch("g")!, mode: .major))
+        #expect(throws: (any Error).self) { try NewScoreArguments.key("fes minor") }
+        #expect(try NewScoreArguments.time("C") == TimeSignature(4, 4))
+        #expect(try NewScoreArguments.time("¢") == TimeSignature(2, 2))
+        #expect(try NewScoreArguments.time("4/4") == TimeSignature(4, 4, symbol: false))
+    }
+
     @Test func transformText() async throws {
         let environment = environment()
         guard environment.pythonLyDirectory != nil else { return } // python-ly not fetched yet

@@ -69,6 +69,16 @@ final class ClaudeBridge {
                 try controller(for: params).bridgeEngrave(params, reply: reply)
             case "reveal":
                 reply(.success(try controller(for: params).bridgeReveal(params)))
+            case "openDocument":
+                // A score new_score just wrote.
+                guard let path = params["path"]?.string, path.hasSuffix(".ly"),
+                      FileManager.default.fileExists(atPath: path) else {
+                    throw BridgeError("Give the path of a .ly file to open.")
+                }
+                if params["project"]?.bool == true { UserDefaults.standard.set("project", forKey: "sidebarMode") }
+                NSDocumentController.shared.openDocument(withContentsOf: URL(fileURLWithPath: path), display: true) { _, _, error in
+                    reply(error.map { .failure($0) } ?? .success(["opened": .string(path)]))
+                }
             default:
                 throw BridgeError("Frescobaldi doesn't know the request \(method). Update the app or the helper.")
             }
