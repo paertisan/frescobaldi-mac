@@ -304,12 +304,8 @@ final class ScoreView: PDFView {
 
 struct PreviewEmptyState: View {
     var body: some View {
-        ContentUnavailableView {
-            Label("No Preview", systemImage: "music.note")
-        } description: {
-            Text("Engrave the document (⌘R) to see the score here.")
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        QuietEmptyState(title: "No Preview", symbol: "music.note",
+                        message: "Engrave the document (⌘R) to see the score here.")
         .themedBackground(fallback: Color(nsColor: .underPageBackgroundColor))
     }
 }

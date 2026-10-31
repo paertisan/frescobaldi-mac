@@ -27,9 +27,9 @@ final class TargetMenuController: NSObject, NSMenuDelegate {
 
     /// Refreshes the button's title from the project and choice.
     func update() {
-        let (title, symbol) = face()
+        // Just the name on the button; the menu has the icons.
+        let (title, _) = face()
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         guard let menu = button.menu else { return }
         if menu.items.isEmpty { menu.addItem(item) } else { menu.items[0] = item }
         button.setTitle(title)

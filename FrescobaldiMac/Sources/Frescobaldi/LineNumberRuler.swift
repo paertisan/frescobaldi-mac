@@ -30,7 +30,8 @@ final class LineNumberRuler: NSRulerView {
     override var isFlipped: Bool { true }
 
     private var numberFont: NSFont {
-        NSFont.monospacedDigitSystemFont(ofSize: max(9, (textView?.font?.pointSize ?? 13) - 2), weight: .regular)
+        // Smaller than the text, so the numbers stay in the background.
+        NSFont.monospacedDigitSystemFont(ofSize: max(9, ((textView?.font?.pointSize ?? 13) * 0.78).rounded()), weight: .regular)
     }
 
     /// Widens the ruler for the number of digits.
@@ -69,7 +70,7 @@ final class LineNumberRuler: NSRulerView {
             let point = NSPoint(x: ruleThickness - size.width - 6, y: y + (height - size.height) / 2)
             label.draw(at: point, withAttributes: line == currentLine ? currentAttributes : attributes)
             if let severity = issueMarkers[line + 1] {
-                let color: NSColor = severity.isError ? .systemRed : .systemYellow
+                let color: NSColor = severity.isError ? .systemRed : .systemOrange
                 color.setFill()
                 let dot = NSRect(x: 4, y: y + height / 2 - 3.5, width: 7, height: 7)
                 NSBezierPath(ovalIn: dot).fill()

@@ -42,6 +42,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         .appendingPathComponent("Frescobaldi-\(UUID().uuidString)", isDirectory: true)
     private var issueIndex = -1
     private var logWasShown = false
+    /// The issues panel was opened by errors, not by the user, so a clean
+    /// engrave closes it again.
+    private var logOpenedForErrors = false
     private var cancellables: Set<AnyCancellable> = []
 
     init(document: LilyPondDocument) {
@@ -102,7 +105,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         logItem.isCollapsed = true
         editorSplit.addSplitViewItem(editorItem)
         editorSplit.addSplitViewItem(logItem)
-        editorSplit.splitView.autosaveName = "EditorSplit"
+        // Not autosaved: the issues panel starts closed, and opens for errors
+        // or when asked.
 
         let editorAreaItem = NSSplitViewItem(viewController: editorSplit)
         editorAreaItem.minimumThickness = 300
@@ -220,8 +224,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     private func buildToolbar() {
-        // A new identifier, so saved layouts from before the target menu reset.
-        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar2")
+        // A new identifier, so saved layouts from before the Engrave button
+        // took over Stop reset.
+        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar3")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true
@@ -231,12 +236,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, ToolbarID.engrave, ToolbarID.stop, ToolbarID.target, .flexibleSpace,
+        [.toggleSidebar, .sidebarTrackingSeparator, ToolbarID.engrave, ToolbarID.target, .flexibleSpace,
          ToolbarID.status, .flexibleSpace, ToolbarID.midi, ToolbarID.log, ToolbarID.preview]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [ToolbarID.transpose, .space]
+        toolbarDefaultItemIdentifiers(toolbar) + [ToolbarID.stop, ToolbarID.transpose, .space]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
@@ -254,7 +259,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         switch id {
         case ToolbarID.engrave:
-            return button("Engrave", "music.note", #selector(engravePreview(_:)), "Engrave (⌘R)")
+            // Stop while engraving, so one button does both.
+            return button("Engrave", "music.note", #selector(engraveOrStop(_:)), "Engrave (⌘R)")
         case ToolbarID.stop:
             return button("Stop", "stop.fill", #selector(stopEngraving(_:)), "Stop Engraving (⌘.)")
         case ToolbarID.midi:
@@ -290,6 +296,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         switch item.itemIdentifier {
+        case ToolbarID.engrave:
+            let running = engraveModel.isRunning
+            item.image = NSImage(systemSymbolName: running ? "stop.fill" : "music.note",
+                                 accessibilityDescription: running ? "Stop" : "Engrave")
+            item.label = running ? "Stop" : "Engrave"
+            item.toolTip = running ? "Stop Engraving (⌘.)" : "Engrave (⌘R)"
+            return true
         case ToolbarID.stop:
             return engraveModel.isRunning
         case ToolbarID.midi:
@@ -676,7 +689,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         if !result.cancelled && engraveModel.errorCount > 0 {
             engraveModel.selectedTab = .issues
+            if logItem.isCollapsed { logOpenedForErrors = true }
             setLogVisible(true)
+        } else if !result.cancelled && engraveModel.messages.isEmpty && logOpenedForErrors {
+            logOpenedForErrors = false
+            setLogVisible(false)
         }
     }
 
@@ -977,6 +994,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         preview.printOperation(printInfo: printInfo)
     }
 
+    /// The toolbar's Engrave button, which stops a run in progress.
+    @objc func engraveOrStop(_ sender: Any?) {
+        if engraveModel.isRunning { stopEngraving(sender) } else { engravePreview(sender) }
+    }
+
     @objc func zoomInPreview(_ sender: Any?) { preview.zoomIn() }
     @objc func zoomOutPreview(_ sender: Any?) { preview.zoomOut() }
     @objc func zoomToFitPreview(_ sender: Any?) { preview.fitWidth() }
@@ -984,6 +1006,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: Panels
 
     @objc func toggleLog(_ sender: Any?) {
+        logOpenedForErrors = false
         setLogVisible(logItem.isCollapsed)
     }
 

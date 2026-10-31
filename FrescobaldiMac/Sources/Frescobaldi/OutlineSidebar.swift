@@ -38,8 +38,8 @@ struct OutlineSidebarView: View {
     var body: some View {
         Group {
             if model.items.isEmpty {
-                ContentUnavailableView("No Outline", systemImage: "list.bullet.indent",
-                                       description: Text("Variables, scores and %% markers appear here."))
+                QuietEmptyState(title: "No Outline", symbol: "list.bullet.indent",
+                                message: "Variables, scores and %% markers appear here.")
             } else {
                 List(selection: $model.selection) {
                     ForEach(model.items) { item in
@@ -49,7 +49,7 @@ struct OutlineSidebarView: View {
                                 .help("Line \(item.line)")
                         } icon: {
                             Image(systemName: item.symbol)
-                                .foregroundStyle(item.kind == .marker ? Color.accentColor : Color.secondary)
+                                .foregroundStyle(item.kind == .marker ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                         }
                         .padding(.leading, CGFloat(item.level) * 12)
                         .tag(item.id)

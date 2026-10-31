@@ -34,6 +34,9 @@ enum TargetChoice: Equatable {
 /// tree, the project folder, its targets and suggestions for organizing it.
 final class ProjectModel: ObservableObject {
     @Published private(set) var project: LilyPondProject?
+    /// The document has a file, so a project is on its way even while
+    /// `project` is still nil.
+    @Published private(set) var hasFile = false
     /// The window's own file, to mark it in the lists.
     @Published private(set) var currentPath: String?
     /// Expanded rows (include nodes and folders), kept across refreshes.
@@ -101,9 +104,11 @@ final class ProjectModel: ObservableObject {
         guard let load = Self.loader(for: document) else {
             project = nil
             currentPath = nil
+            hasFile = false
             isUpToDate = true
             return
         }
+        if !hasFile { hasFile = true }
         isUpToDate = false
         let generation = generation
         queue.async { [weak self] in
@@ -190,6 +195,14 @@ final class ProjectModel: ObservableObject {
         Binding(get: { self.expanded.contains(id) },
                 set: { if $0 { self.expanded.insert(id) } else { self.expanded.remove(id) } })
     }
+
+    /// A sidebar section that starts expanded unless `expanded` is false.
+    func section(_ name: String, expanded: Bool = true) -> Binding<Bool> {
+        let id = "section:\(name)"
+        guard expanded else { return binding(for: id) }
+        let collapsed = binding(for: "collapsed-" + id)
+        return Binding(get: { !collapsed.wrappedValue }, set: { collapsed.wrappedValue = !$0 })
+    }
 }
 
 // MARK: - Sidebar
@@ -202,14 +215,12 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Sidebar", selection: $mode) {
-                Text("Outline").tag("outline")
-                Text("Project").tag("project")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            TextTabs(selection: $mode, tabs: [.init(value: "outline", title: "Outline"),
+                                               .init(value: "project", title: "Project")])
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
             if mode == "project" {
                 ProjectNavigatorView(model: project)
             } else {
@@ -226,16 +237,25 @@ struct ProjectNavigatorView: View {
     var body: some View {
         if let project = model.project {
             List {
+                // Suggestions start folded: the count in the header is enough
+                // until you want to tidy up.
                 if !project.problems.isEmpty {
-                    Section("Suggestions") {
+                    Section(isExpanded: model.section("Suggestions", expanded: false)) {
                         ForEach(project.problems) { problem in
                             ProblemRow(problem: problem, root: project.root)
                                 .contentShape(Rectangle())
                                 .onTapGesture { model.open(problem.file, line: problem.line) }
                         }
+                    } header: {
+                        HStack(spacing: 6) {
+                            Text("Suggestions")
+                            Text("\(project.problems.count)")
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
-                Section {
+                Section(isExpanded: model.section("Targets")) {
                     TargetsSection(project: project, model: model)
                 } header: {
                     HStack {
@@ -245,13 +265,14 @@ struct ProjectNavigatorView: View {
                             Image(systemName: "gearshape")
                         }
                         .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
                         .help("Project Settings…")
                     }
                 }
-                Section("Includes") {
+                Section("Includes", isExpanded: model.section("Includes")) {
                     IncludeTreeRow(node: project.tree, project: project, model: model)
                 }
-                Section("Folder") {
+                Section("Folder", isExpanded: model.section("Folder")) {
                     ForEach(project.files) { file in
                         FileTreeRow(file: file, project: project, model: model)
                     }
@@ -259,10 +280,12 @@ struct ProjectNavigatorView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+        } else if model.hasFile {
+            // Loading: nothing rather than a message that's about to go.
+            Color.clear
         } else {
-            ContentUnavailableView("No Project", systemImage: "folder",
-                                   description: Text("Save the document to see its includes and folder."))
-                .frame(maxHeight: .infinity)
+            QuietEmptyState(title: "No Project", symbol: "folder",
+                            message: "Save the document to see its includes and folder.")
         }
     }
 }
@@ -312,7 +335,7 @@ private struct TargetsSection: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "folder")
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.secondary)
                         .frame(width: 16)
                     Text(folder)
                         .fontWeight(targets.contains { active.contains(LilyPondProject.normalized($0)) }
@@ -346,11 +369,12 @@ private struct TargetRow: View {
     let open: (() -> Void)?
     var runVerb = "Engrave"
     let run: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
-                .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
             Text(title)
                 .fontWeight(isActive ? .semibold : .regular)
@@ -358,15 +382,19 @@ private struct TargetRow: View {
                 .truncationMode(.middle)
             Spacer(minLength: 4)
             if let badge { Badge(badge) }
+            // Shown on hover, so a long list of parts isn't a column of buttons.
             Button(action: run) {
                 Image(systemName: "play.fill")
                     .font(.caption)
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
             .help("\(runVerb) \(title)")
             .accessibilityLabel("\(runVerb) \(title)")
+            .modifier(RevealOnHover(hovering: hovering))
         }
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .onTapGesture { open?() }
         .help(help)
     }
@@ -484,7 +512,7 @@ private struct FileTreeRow: View {
     private var row: some View {
         HStack(spacing: 6) {
             Image(systemName: file.isDirectory ? "folder" : FileIcon.symbol(for: file.url))
-                .foregroundStyle(file.isDirectory ? Color.accentColor : .secondary)
+                .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(file.url.lastPathComponent)
                 .fontWeight(path == model.currentPath ? .semibold : .regular)
@@ -506,8 +534,7 @@ private struct ProblemRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: symbol)
-                .foregroundStyle(color)
+            mark
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(problem.message)
@@ -528,19 +555,15 @@ private struct ProblemRow: View {
         return problem.line.map { "\(file):\($0)" } ?? file
     }
 
-    private var symbol: String {
+    /// The error or warning symbol, or a light bulb for hints.
+    @ViewBuilder private var mark: some View {
         switch problem.severity {
-        case .error: "xmark.octagon.fill"
-        case .warning: "exclamationmark.triangle.fill"
-        case .hint: "lightbulb"
-        }
-    }
-
-    private var color: Color {
-        switch problem.severity {
-        case .error: .red
-        case .warning: .orange
-        case .hint: .secondary
+        case .error, .warning:
+            SeverityMark(isError: problem.severity == .error)
+        case .hint:
+            Image(systemName: "lightbulb")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

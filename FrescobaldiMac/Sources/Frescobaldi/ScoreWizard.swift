@@ -15,6 +15,14 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private let model = ScoreWizardModel()
+    private var themeObserver: Any?
+
+    /// The same appearance and window color as the document windows.
+    private func applyTheme() {
+        let theme = EditorTheme.current
+        window?.appearance = theme.appearance
+        window?.backgroundColor = theme.chrome ?? .windowBackgroundColor
+    }
 
     private init() {
         let hosting = NSHostingController(rootView: ScoreWizardView(model: model))
@@ -27,6 +35,11 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         if !window.setFrameUsingName("ScoreWizard") { window.center() }
+        applyTheme()
+        themeObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil,
+                                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyTheme() }
+        }
         model.onCancel = { [weak self] in self?.close() }
         model.onCreate = { [weak self] in self?.chooseFolder() }
     }
@@ -36,6 +49,7 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         model.preview.stop()
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         Self.current = nil
     }
 
@@ -289,6 +303,7 @@ struct ScoreWizardView: View {
             .padding(12)
         }
         .frame(minWidth: 900, minHeight: 580)
+        .themedBackground()
         .onChange(of: model.spec, initial: true) { _, spec in model.preview.update(spec) }
     }
 
@@ -330,6 +345,7 @@ private struct EnsembleStep: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
             .frame(width: 220)
 
             Divider()
@@ -337,7 +353,8 @@ private struct EnsembleStep: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(model.preset?.title ?? model.savedMatch?.name ?? "Custom Ensemble")
-                        .font(.headline)
+                        .font(.title3)
+                        .fontDesign(.serif)
                     Spacer()
                     Text("Drag to reorder. Click a name to rename a player.")
                         .font(.caption)
@@ -591,6 +608,7 @@ private struct MusicStep: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     private var mode: Binding<KeySignature.Mode> {
@@ -670,6 +688,7 @@ private struct TitlesStep: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -723,6 +742,7 @@ private struct LayoutStep: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     private var automaticSize: Int {

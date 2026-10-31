@@ -30,7 +30,8 @@ final class LilyTextView: NSTextView {
         allowsCharacterPickerTouchBarItem = false
         usesFontPanel = false
         drawsBackground = true
-        textContainerInset = NSSize(width: 4, height: 6)
+        // Room between the line numbers and the text, and above the first line.
+        textContainerInset = NSSize(width: 10, height: 12)
         applyStyle()
     }
 

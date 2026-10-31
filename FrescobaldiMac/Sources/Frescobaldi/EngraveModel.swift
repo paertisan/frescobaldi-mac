@@ -48,55 +48,55 @@ final class EngraveModel: ObservableObject {
 
 // MARK: - Toolbar status
 
-/// The centered toolbar item: what the engraver is doing.
+/// The centered toolbar item: what the engraver is doing, as quiet text.
+/// Success is the normal case, so only problems get color.
 struct EngraveStatusView: View {
     @ObservedObject var model: EngraveModel
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             switch model.status {
             case .idle:
-                Image(systemName: "music.note")
-                    .foregroundStyle(.secondary)
-                Text("Ready to engrave")
-                    .foregroundStyle(.secondary)
+                Text("⌘R to engrave")
+                    .foregroundStyle(.tertiary)
             case let .running(mode):
                 ProgressView()
-                    .controlSize(.small)
-                if let command = model.commandName {
-                    Text("Running \(command)…")
-                } else if let progress = model.progress {
-                    Text("Engraving \(progress.total) targets (\(progress.done) done)…")
-                } else {
-                    Text(model.targetName.map { "Engraving \($0)…" }
-                         ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
+                    .controlSize(.mini)
+                Group {
+                    if let command = model.commandName {
+                        Text("Running \(command)…")
+                    } else if let progress = model.progress {
+                        Text("Engraving \(progress.total) targets (\(progress.done) done)…")
+                    } else {
+                        Text(model.targetName.map { "Engraving \($0)…" }
+                             ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
+                    }
                 }
+                .foregroundStyle(.secondary)
             case let .finished(succeeded, errors, warnings, duration):
-                Image(systemName: succeeded && errors == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                    .foregroundStyle(succeeded && errors == 0 ? Color.green : Color.red)
                 let time = "\(duration.formatted(.number.precision(.fractionLength(1)))) s"
                 let what = model.progress.map { " \($0.total) targets" } ?? model.targetName.map { " \($0)" } ?? ""
-                if let command = model.commandName {
-                    Text(succeeded && errors == 0 ? "Ran \(command) in \(time)" : "\(command) failed")
-                } else {
-                    Text(succeeded && errors == 0 ? "Engraved\(what) in \(time)" : "Engraving\(what) failed")
+                Group {
+                    if let command = model.commandName {
+                        Text(succeeded && errors == 0 ? "Ran \(command) in \(time)" : "\(command) failed")
+                    } else {
+                        Text(succeeded && errors == 0 ? "Engraved\(what) in \(time)" : "Engraving\(what) failed")
+                    }
                 }
-                if errors > 0 { IssueBadge(count: errors, error: true) }
-                if warnings > 0 { IssueBadge(count: warnings, error: false) }
+                .foregroundStyle(succeeded && errors == 0 ? .secondary : .primary)
+                if errors > 0 { IssueCount(count: errors, error: true) }
+                if warnings > 0 { IssueCount(count: warnings, error: false) }
             case .cancelled:
-                Image(systemName: "stop.circle")
-                    .foregroundStyle(.secondary)
                 Text("Stopped")
                     .foregroundStyle(.secondary)
             case let .failed(message):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
                 Text(message)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
         }
         .font(.callout)
+        .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(minWidth: 220, maxWidth: 380)
         .contentShape(Rectangle())
@@ -107,21 +107,19 @@ struct EngraveStatusView: View {
     }
 }
 
-private struct IssueBadge: View {
+/// "2 errors" in plain text after a small symbol.
+private struct IssueCount: View {
     let count: Int
     let error: Bool
 
     var body: some View {
-        // Only the icon is colored: yellow text is unreadable in light mode.
-        HStack(spacing: 2) {
-            Image(systemName: error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(error ? Color.red : Color.yellow)
-            Text("\(count)")
+        HStack(spacing: 4) {
+            SeverityMark(isError: error)
+                .accessibilityHidden(true)
+            Text(error ? (count == 1 ? "1 error" : "\(count) errors") : (count == 1 ? "1 warning" : "\(count) warnings"))
                 .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
-        .font(.caption.weight(.semibold))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(error ? "\(count) errors" : "\(count) warnings")
     }
 }
 
@@ -133,14 +131,10 @@ struct EngravePanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker("Panel", selection: $model.selectedTab) {
-                    ForEach(EngraveModel.PanelTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+                TextTabs(selection: $model.selectedTab, tabs: [
+                    .init(value: .issues, title: "Issues", detail: model.messages.isEmpty ? nil : "\(model.messages.count)"),
+                    .init(value: .log, title: "Log"),
+                ])
                 Spacer()
                 if model.selectedTab == .log {
                     Button {
@@ -150,13 +144,13 @@ struct EngravePanelView: View {
                         Image(systemName: "doc.on.doc")
                     }
                     .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                     .help("Copy Log")
                     .disabled(model.log.isEmpty)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            Divider()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
             switch model.selectedTab {
             case .issues: issues
             case .log: logView
@@ -167,11 +161,10 @@ struct EngravePanelView: View {
 
     @ViewBuilder private var issues: some View {
         if model.messages.isEmpty {
-            ContentUnavailableView {
-                Label(model.isRunning ? "Engraving…" : "No Issues", systemImage: "checkmark.circle")
-            } description: {
-                Text(model.isRunning ? "Errors and warnings will appear here." : "LilyPond reported no errors or warnings.")
-            }
+            Text(model.isRunning ? "Engraving…" : "No errors or warnings")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(model.messages) { message in
                 Button {
@@ -181,7 +174,7 @@ struct EngravePanelView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .listStyle(.inset)
+            .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
     }
@@ -191,9 +184,11 @@ struct EngravePanelView: View {
             ScrollView {
                 Text(model.log.isEmpty ? " " : model.log)
                     .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(8)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 4)
                 Color.clear.frame(height: 1).id("end")
             }
             .onChange(of: model.log) {
@@ -207,18 +202,21 @@ private struct IssueRow: View {
     let message: LilyPondMessage
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: message.severity.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(message.severity.isError ? Color.red : Color.yellow)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(message.message)
-                    .lineLimit(2)
-                Text(message.isLocated
-                     ? "\(URL(fileURLWithPath: message.file).lastPathComponent):\(message.line)"
-                       + (message.column > 0 ? ":\(message.column)" : "")
-                     : "No location · Show in Log")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            SeverityMark(isError: message.severity.isError)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(message.message)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Text(message.isLocated
+                         ? "\(URL(fileURLWithPath: message.file).lastPathComponent):\(message.line)"
+                           + (message.column > 0 ? ":\(message.column)" : "")
+                         : "Show in Log")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
                 if message.context.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
                     Text(message.context.joined(separator: "\n"))
                         .font(.system(.caption, design: .monospaced))
@@ -226,10 +224,10 @@ private struct IssueRow: View {
                         .lineLimit(6)
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(message.severity.isError ? "Error" : "Warning"): \(message.message)")
     }
 }
