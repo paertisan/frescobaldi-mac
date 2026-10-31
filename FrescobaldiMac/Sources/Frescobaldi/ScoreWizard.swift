@@ -35,6 +35,7 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func windowWillClose(_ notification: Notification) {
+        model.preview.stop()
         Self.current = nil
     }
 
@@ -89,6 +90,7 @@ final class ScoreWizardModel: ObservableObject {
 
     @Published var spec: ScoreSpec
     @Published var step: Step = .ensemble
+    let preview = ScorePreview()
     var onCancel: () -> Void = {}
     var onCreate: () -> Void = {}
 
@@ -204,6 +206,8 @@ struct ScoreWizardView: View {
                     }
                 }
                 .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                ScorePreviewPane(preview: model.preview)
             }
             Divider()
             HStack {
@@ -229,6 +233,7 @@ struct ScoreWizardView: View {
             .padding(12)
         }
         .frame(minWidth: 900, minHeight: 580)
+        .onChange(of: model.spec, initial: true) { _, spec in model.preview.update(spec) }
     }
 
     private func move(_ offset: Int) {
