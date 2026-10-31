@@ -50,6 +50,9 @@ import Testing
         #expect(TimeSignature(7, 8).barDuration == "8*7")
         #expect(TimeSignature(6, 8).beat == "4." && TimeSignature(3, 4).beat == "4" && TimeSignature(2, 2).beat == "2")
         #expect(TimeSignature(4, 4).title == "C (4/4)" && TimeSignature(4, 4, symbol: false).title == "4/4")
+        #expect(TimeSignature(3, 8).fits(pickup: "8") && TimeSignature(3, 8).fits(pickup: "8."))
+        #expect(!TimeSignature(3, 8).fits(pickup: "4.") && !TimeSignature(2, 4).fits(pickup: "2"))
+        #expect(TimeSignature(4, 4).fits(pickup: "2.") && !TimeSignature(3, 4).fits(pickup: "2."))
     }
 }
 
@@ -86,6 +89,29 @@ import Testing
         }
         #expect(Ensemble.all.allSatisfy { $0.instruments.allSatisfy { Instrument.named($0) != nil } })
         #expect(Set(Instrument.all.map(\.id)).count == Instrument.all.count)
+    }
+
+    @Test func newPlayersGoInScoreOrder() {
+        var spec = ScoreSpec(ensemble: Ensemble.named("violin-piano")!)
+        #expect(spec.insertionIndex(for: Instrument.named("cello")!) == 1)
+        #expect(spec.insertionIndex(for: Instrument.named("flute")!) == 0)
+        #expect(spec.insertionIndex(for: Instrument.named("chord-names")!) == 0)
+        spec = ScoreSpec(ensemble: Ensemble.named("lead-sheet")!)
+        #expect(spec.insertionIndex(for: Instrument.named("piano")!) == 1, "before the voice, after the chords")
+        #expect(spec.insertionIndex(for: Instrument.named("violin")!) == 2)
+    }
+
+    @Test func writesAFolder() throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent("write-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let folder = parent.appendingPathComponent("My Quartet")
+        let main = try ProjectTemplate.write(ScoreSpec(ensemble: Ensemble.named("string-quartet")!), to: folder,
+                                             version: LilyPondVersion(2, 26, 0))
+        #expect(main.lastPathComponent == "my-quartet.ly")
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("parts/viola.ly").path))
+        #expect(throws: (any Error).self) {
+            try ProjectTemplate.write(ScoreSpec(ensemble: Ensemble.named("piano")!), to: folder, version: nil)
+        }
     }
 
     private func files(_ spec: ScoreSpec, name: String = "Test Piece") -> [String: String] {

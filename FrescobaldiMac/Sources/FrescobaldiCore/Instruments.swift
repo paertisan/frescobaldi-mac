@@ -182,6 +182,8 @@ public struct Instrument: Hashable, Sendable, Identifiable {
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     public var title: String { [name, pitchName].compactMap { $0 }.joined(separator: " ") }
+    /// For menus: tells the two guitars apart.
+    public var menuTitle: String { kind == .tablature ? "\(title) with Tablature" : title }
 
     /// Transposes by octaves only (piccolo, double bass): written that way
     /// in every score, so always entered as written.

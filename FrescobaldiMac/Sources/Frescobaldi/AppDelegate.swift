@@ -56,60 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         (NSDocumentController.shared as? DocumentController)?.newDocument(from: template)
     }
 
-    /// File > New Project: a folder with the score, a style sheet, and the
-    /// music in one include file per instrument (see ProjectTemplate).
-    @objc func newProject(_ sender: Any?) {
-        let panel = NSSavePanel()
-        panel.title = "New Project"
-        panel.message = "Creates a folder with the score, a style sheet, the music in one file per instrument, and the parts."
-        panel.nameFieldLabel = "Project:"
-        panel.nameFieldStringValue = "Untitled Project"
-        panel.prompt = "Create"
-        panel.canCreateDirectories = true
-
-        let ensembles = NSPopUpButton(frame: .zero, pullsDown: false)
-        ensembles.addItems(withTitles: Ensemble.all.map(\.title))
-        let label = NSTextField(labelWithString: "Instruments:")
-        let accessory = NSStackView(views: [label, ensembles])
-        accessory.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
-        panel.accessoryView = accessory
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let folder = panel.url else { return }
-            let ensemble = Ensemble.all[max(0, ensembles.indexOfSelectedItem)]
-            self?.createProject(at: folder, ensemble: ensemble)
-        }
-    }
-
-    private func createProject(at folder: URL, ensemble: Ensemble) {
-        let fm = FileManager.default
-        do {
-            if fm.fileExists(atPath: folder.path) {
-                let contents = (try? fm.contentsOfDirectory(atPath: folder.path)) ?? ["?"]
-                guard contents.filter({ !$0.hasPrefix(".") }).isEmpty else {
-                    throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError, userInfo: [
-                        NSLocalizedDescriptionKey: "\"\(folder.lastPathComponent)\" already exists and isn't empty.",
-                        NSLocalizedRecoverySuggestionErrorKey: "Choose another name for the project.",
-                    ])
-                }
-            }
-            let title = folder.lastPathComponent
-            var spec = ScoreSpec(ensemble: ensemble)
-            spec.paperSize = Locale.current.measurementSystem == .us ? "letter" : "a4"
-            for (path, contents) in ProjectTemplate.files(for: spec, name: title, version: lilypondVersion) {
-                let url = folder.appendingPathComponent(path)
-                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try Data(contents.utf8).write(to: url, options: .withoutOverwriting)
-            }
-            // Show the new project's files.
-            UserDefaults.standard.set("project", forKey: "sidebarMode")
-            let main = folder.appendingPathComponent(ProjectTemplate.mainFileName(name: title))
-            NSDocumentController.shared.openDocument(withContentsOf: main, display: true) { _, _, error in
-                if let error { NSApp.presentError(error) }
-            }
-        } catch {
-            NSApp.presentError(error)
-        }
+    /// File > New Score…: the Score Wizard.
+    @objc func newScore(_ sender: Any?) {
+        ScoreWizardWindowController.show()
     }
 
     @objc func openRecent(_ sender: NSMenuItem) {

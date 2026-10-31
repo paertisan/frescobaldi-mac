@@ -32,6 +32,29 @@ public enum ProjectTemplate {
         -> [(path: String, contents: String)] {
         Writer(spec: spec, name: name, version: version).files()
     }
+
+    /// Writes the project into `folder`, which must not exist or be empty;
+    /// its name names the score file. Returns the score file.
+    @discardableResult
+    public static func write(_ spec: ScoreSpec, to folder: URL, version: LilyPondVersion?,
+                             fileManager: FileManager = .default) throws -> URL {
+        if fileManager.fileExists(atPath: folder.path) {
+            let contents = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? ["?"]
+            guard contents.filter({ !$0.hasPrefix(".") }).isEmpty else {
+                throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError, userInfo: [
+                    NSLocalizedDescriptionKey: "\"\(folder.lastPathComponent)\" already exists and isn't empty.",
+                    NSLocalizedRecoverySuggestionErrorKey: "Choose another name for the project.",
+                ])
+            }
+        }
+        let name = folder.lastPathComponent
+        for (path, contents) in files(for: spec, name: name, version: version) {
+            let url = folder.appendingPathComponent(path)
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(contents.utf8).write(to: url, options: .withoutOverwriting)
+        }
+        return folder.appendingPathComponent(mainFileName(name: name))
+    }
 }
 
 private struct Writer {

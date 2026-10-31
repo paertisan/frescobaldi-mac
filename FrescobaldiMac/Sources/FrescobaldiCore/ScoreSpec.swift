@@ -93,6 +93,17 @@ public struct ScoreSpec: Equatable, Sendable {
 
     public var effectiveHideEmptyStaves: Bool { hideEmptyStaves ?? (staffCount >= 8) }
 
+    /// Where a new player of `instrument` goes: after the others of its
+    /// family, or else in score order; chord names on top.
+    public func insertionIndex(for instrument: Instrument) -> Int {
+        if instrument.kind == .chordNames { return 0 }
+        let families = players.map { Instrument.named($0.instrument)?.family ?? .other }
+        if let last = families.lastIndex(of: instrument.family) { return last + 1 }
+        let order = Instrument.Family.allCases
+        let rank = order.firstIndex(of: instrument.family) ?? 0
+        return families.firstIndex { $0 != .other && order.firstIndex(of: $0)! > rank } ?? players.count
+    }
+
     /// Players with music of their own (not chord names).
     public var playedCount: Int { resolvedPlayers.filter(\.instrument.isPlayed).count }
     public var hasParts: Bool { makeParts && playedCount > 1 }
@@ -121,6 +132,8 @@ public struct ResolvedPlayer: Hashable, Sendable {
     /// 1, 2 … when several players play the same instrument.
     public let number: Int?
     public let name: String
+    /// The name without the user's: "Violin II".
+    public let numberedName: String
     public let shortName: String
     /// The music variable: `clarinetI`.
     public let variable: String
@@ -144,7 +157,7 @@ public struct ResolvedPlayer: Hashable, Sendable {
             let custom = player.name?.trimmingCharacters(in: .whitespaces)
             return ResolvedPlayer(
                 instrument: instrument, number: number,
-                name: custom.flatMap { $0.isEmpty ? nil : $0 } ?? numbered,
+                name: custom.flatMap { $0.isEmpty ? nil : $0 } ?? numbered, numberedName: numbered,
                 shortName: [instrument.shortName, label].compactMap { $0 }.joined(separator: " "),
                 variable: instrument.variable + (number.map(roman) ?? ""),
                 file: instrument.file + (number.map { "-\($0)" } ?? ""))
@@ -282,6 +295,17 @@ public struct TimeSignature: Hashable, Sendable {
         if n == 2, d == 1 { return "\\breve" }
         if n == 3, d % 2 == 0, plain.contains(d / 2) { return "\(d / 2)." }
         return "\(denominator)*\(numerator)"
+    }
+
+    /// Pickup durations, shortest first.
+    public static let pickups = ["16", "8", "8.", "4", "4.", "2", "2."]
+
+    /// Whether a pickup of `duration` is shorter than a bar.
+    public func fits(pickup duration: String) -> Bool {
+        guard let base = Int(duration.filter(\.isNumber)), base > 0 else { return false }
+        // duration = 1/base, or 3/(2 base) dotted; compare with numerator/denominator.
+        let (n, d) = duration.hasSuffix(".") ? (3, 2 * base) : (1, base)
+        return n * denominator < numerator * d
     }
 
     /// The usual beat for a metronome mark.
