@@ -111,6 +111,62 @@ final class ScoreWizardModel: ObservableObject {
         spec.apply(ensemble)
     }
 
+    // MARK: My Ensembles
+
+    /// An ensemble the user saved, with its players' names.
+    struct SavedEnsemble: Codable, Hashable, Identifiable {
+        var name: String
+        var players: [Player]
+        var grouping: Grouping
+        var instrumentNames: InstrumentNames
+        var makeParts: Bool
+        var id: String { name }
+
+        func matches(_ spec: ScoreSpec) -> Bool {
+            grouping == spec.grouping && players.map { [$0.instrument, $0.name ?? ""] }
+                == spec.players.map { [$0.instrument, $0.name ?? ""] }
+        }
+    }
+
+    private static let savedKey = "scoreWizardEnsembles"
+
+    @Published private(set) var saved: [SavedEnsemble] = {
+        guard let data = UserDefaults.standard.data(forKey: savedKey) else { return [] }
+        return (try? JSONDecoder().decode([SavedEnsemble].self, from: data)) ?? []
+    }()
+
+    var savedMatch: SavedEnsemble? { saved.first { $0.matches(spec) } }
+
+    /// Saves the players as `name`, replacing one of that name.
+    func saveEnsemble(as name: String) {
+        let ensemble = SavedEnsemble(name: name, players: spec.players, grouping: spec.grouping,
+                                     instrumentNames: spec.instrumentNames, makeParts: spec.makeParts)
+        saved.removeAll { $0.name == name }
+        saved.append(ensemble)
+        saved.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        storeSaved()
+    }
+
+    func deleteEnsemble(_ ensemble: SavedEnsemble) {
+        saved.removeAll { $0.name == ensemble.name }
+        storeSaved()
+    }
+
+    func choose(_ ensemble: SavedEnsemble) {
+        // Fresh players, so ids stay unique.
+        spec.players = ensemble.players.map { Player(instrument: $0.instrument, name: $0.name) }
+            .filter { Instrument.named($0.instrument) != nil }
+        spec.grouping = ensemble.grouping
+        spec.instrumentNames = ensemble.instrumentNames
+        spec.makeParts = ensemble.makeParts
+        spec.hideEmptyStaves = nil
+        spec.scoreStaffSize = nil
+    }
+
+    private func storeSaved() {
+        if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: Self.savedKey) }
+    }
+
     /// Adds a player in score order; returns its id.
     @discardableResult
     func add(_ instrument: Instrument) -> Player.ID {
@@ -246,6 +302,10 @@ struct ScoreWizardView: View {
 private struct EnsembleStep: View {
     @ObservedObject var model: ScoreWizardModel
     @State private var selection: Set<Player.ID> = []
+    @State private var naming = false
+    @State private var newName = ""
+
+    private static let savedPrefix = "saved:"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -257,6 +317,17 @@ private struct EnsembleStep: View {
                         }
                     }
                 }
+                if !model.saved.isEmpty {
+                    Section("My Ensembles") {
+                        ForEach(model.saved) { ensemble in
+                            Text(ensemble.name)
+                                .tag(Self.savedPrefix + ensemble.name)
+                                .contextMenu {
+                                    Button("Delete “\(ensemble.name)”") { model.deleteEnsemble(ensemble) }
+                                }
+                        }
+                    }
+                }
             }
             .listStyle(.sidebar)
             .frame(width: 220)
@@ -265,7 +336,7 @@ private struct EnsembleStep: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(model.preset?.title ?? "Custom Ensemble")
+                    Text(model.preset?.title ?? model.savedMatch?.name ?? "Custom Ensemble")
                         .font(.headline)
                     Spacer()
                     Text("Drag to reorder. Click a name to rename a player.")
@@ -283,6 +354,12 @@ private struct EnsembleStep: View {
                     }
                     .help("Remove the selected players")
                     .disabled(selection.isEmpty)
+                    Button("Save Ensemble…") {
+                        newName = model.savedMatch?.name ?? ""
+                        naming = true
+                    }
+                    .disabled(model.spec.players.isEmpty)
+                    .help("Keep these players under My Ensembles, to start other scores with")
                     Spacer()
                     Picker("Brackets:", selection: $model.spec.grouping) {
                         ForEach(Grouping.allCases) { Text($0.title).tag($0) }
@@ -293,15 +370,29 @@ private struct EnsembleStep: View {
             }
             .padding(14)
         }
+        .alert("Save Ensemble", isPresented: $naming) {
+            TextField("Name", text: $newName)
+            Button("Save") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { model.saveEnsemble(as: name) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The players, their names and the brackets are kept under My Ensembles. Right-click one there to delete it.")
+        }
     }
 
     private var presetSelection: Binding<String?> {
-        Binding(get: { model.preset?.id },
+        Binding(get: { model.preset?.id ?? model.savedMatch.map { Self.savedPrefix + $0.name } },
                 set: { id in
-                    if let id, let ensemble = Ensemble.named(id) {
+                    guard let id else { return }
+                    if id.hasPrefix(Self.savedPrefix) {
+                        let name = String(id.dropFirst(Self.savedPrefix.count))
+                        if let ensemble = model.saved.first(where: { $0.name == name }) { model.choose(ensemble) }
+                    } else if let ensemble = Ensemble.named(id) {
                         model.choose(ensemble)
-                        selection = []
                     }
+                    selection = []
                 })
     }
 

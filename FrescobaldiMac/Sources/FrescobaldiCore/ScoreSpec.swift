@@ -192,7 +192,7 @@ public enum Grouping: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
-public enum InstrumentNames: String, CaseIterable, Sendable, Identifiable {
+public enum InstrumentNames: String, Codable, CaseIterable, Sendable, Identifiable {
     case fullThenShort, full, none
     public var id: String { rawValue }
 
