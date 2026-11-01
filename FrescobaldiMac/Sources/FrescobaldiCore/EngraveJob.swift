@@ -42,6 +42,9 @@ public final class EngraveJob: @unchecked Sendable {
     public let outputBase: URL
     public let mode: Mode
     public let extraArguments: [String]
+    /// A `-dinclude-settings` file for preview runs only: the app's links
+    /// for adjusting objects in the preview (`fmac-edit.ly`).
+    public let previewSettings: URL?
     /// A project's build command run instead of LilyPond (`/bin/sh -c`).
     public let shellCommand: String?
     /// LilyPond's working directory: the source's folder, or the command's.
@@ -61,12 +64,13 @@ public final class EngraveJob: @unchecked Sendable {
     private var started: Date?
 
     public init(lilypond: URL, source: URL, outputBase: URL? = nil, mode: Mode = .preview,
-                extraArguments: [String] = []) {
+                extraArguments: [String] = [], previewSettings: URL? = nil) {
         self.lilypond = lilypond
         self.source = source
         self.outputBase = outputBase ?? source.deletingPathExtension()
         self.mode = mode
         self.extraArguments = extraArguments
+        self.previewSettings = previewSettings
         shellCommand = nil
         workingDirectory = source.deletingLastPathComponent()
     }
@@ -80,6 +84,7 @@ public final class EngraveJob: @unchecked Sendable {
         outputBase = directory
         mode = .preview
         extraArguments = []
+        previewSettings = nil
         shellCommand = command
         workingDirectory = directory
     }
@@ -91,7 +96,11 @@ public final class EngraveJob: @unchecked Sendable {
         // source's folder on the include path.
         let sourceFolder = source.deletingLastPathComponent().standardizedFileURL
         let keepFolder = outputBase.deletingLastPathComponent().standardizedFileURL.path != sourceFolder.path
+        // LilyPond takes one settings file; a project's own wins.
+        let ownSettings = extraArguments.contains { $0.hasPrefix("-dinclude-settings") }
+        let settings = mode == .preview && !ownSettings ? previewSettings.map { ["-dinclude-settings=" + $0.path] } : nil
         return [mode == .preview ? "-dpoint-and-click" : "-dno-point-and-click", "--pdf"]
+            + (settings ?? [])
             + (keepFolder ? ["-I", sourceFolder.path] : [])
             + extraArguments
             + ["-o", outputBase.path, source.path]

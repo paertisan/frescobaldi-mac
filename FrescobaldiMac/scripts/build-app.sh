@@ -49,6 +49,8 @@ cp "$BIN/frescobaldi-mcp" "$APP/Contents/Helpers/frescobaldi-mcp"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp -R "$ROOT/Resources/Templates" "$APP/Contents/Resources/Templates"
 cp -R "$ROOT/Resources/Themes" "$APP/Contents/Resources/Themes"
+# Preview links for dragging objects (passed with -dinclude-settings).
+cp -R "$ROOT/Resources/LilyPond" "$APP/Contents/Resources/LilyPond"
 cp "$ROOT/Resources/python/fmac_lytool.py" "$APP/Contents/Resources/python/"
 cp -R "$BUILD/python/ly" "$APP/Contents/Resources/python/ly"
 [[ -f "$BUILD/python/LICENSE-python-ly" ]] && cp "$BUILD/python/LICENSE-python-ly" "$APP/Contents/Resources/python/"
