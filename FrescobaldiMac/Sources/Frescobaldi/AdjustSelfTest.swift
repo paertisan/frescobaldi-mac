@@ -23,6 +23,7 @@ import QuartzCore
         guard let path = env["FMAC_SELFTEST"] else { return }
         out = URL(fileURLWithPath: env["FMAC_SELFTEST_OUT"] ?? NSTemporaryDirectory())
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        if env["FMAC_SELFTEST_WIZARD"] != nil { return wizardSteps() }
         NSDocumentController.shared.openDocument(withContentsOf: URL(fileURLWithPath: path), display: true) { document, _, error in
             guard let controller = (document as? LilyPondDocument)?.windowControllers.first as? DocumentWindowController
             else { return finish("couldn't open: \(String(describing: error))") }
@@ -49,6 +50,44 @@ import QuartzCore
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { MainActor.assumeIsolated { body() } }
     }
 
+    /// CGWindowListCreateImage, looked up at run time: deprecated, but it
+    /// needs no permission for the app's own windows (debug builds only).
+    private static func windowImage(_ window: NSWindow) -> CGImage? {
+        typealias Create = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil }
+        let create = unsafeBitCast(symbol, to: Create.self)
+        let options = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
+        return create(.null, CGWindowListOption.optionIncludingWindow.rawValue, UInt32(window.windowNumber), options)?
+            .takeRetainedValue()
+    }
+
+    /// New Score with the Piano (tables) preset: the ensemble and music
+    /// steps, after the preview has engraved.
+    private static func wizardSteps() {
+        ScoreWizardWindowController.show()
+        guard let (window, model) = ScoreWizardWindowController.shownForTesting, let window else {
+            return finish("no wizard")
+        }
+        model.choose(Ensemble.named("piano-tables")!)
+        log("wizard: preset \(model.preset?.title ?? "none"), tables \(model.spec.pianoTables)")
+        after(6) {
+            save(window, "0-wizard-ensemble")
+            model.step = .music
+            after(2) {
+                save(window, "0-wizard-music")
+                finish("done")
+            }
+        }
+    }
+
+    private static func save(_ window: NSWindow, _ name: String) {
+        window.displayIfNeeded()
+        CATransaction.flush()
+        guard let image = windowImage(window) else { return }
+        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
+            .write(to: out.appendingPathComponent(name + ".png"))
+    }
+
     private static func snapshot(_ controller: DocumentWindowController, _ name: String) {
         guard let window = controller.window, let view = window.contentView?.superview ?? window.contentView else { return }
         window.displayIfNeeded()
@@ -56,8 +95,7 @@ import QuartzCore
         // The window server's picture (PDFKit draws pages in layers that
         // cacheDisplay misses), else the views' own drawing.
         var data: Data?
-        if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                               [.boundsIgnoreFraming, .bestResolution]) {
+        if let image = windowImage(window) {
             // The preview only, at full resolution.
             let preview = controller.preview.view
             let frame = preview.convert(preview.bounds, to: nil)
@@ -150,12 +188,66 @@ import QuartzCore
         log("include: object in \(URL(fileURLWithPath: dynamic.link.path).lastPathComponent)")
         drag(controller, dynamic, by: NSPoint(x: 30, y: 0), name: "5-include") {
             for document in NSDocumentController.shared.documents.compactMap({ $0 as? LilyPondDocument }) {
-                log("include: \(document.displayName) \(document.text.contains("tweak") ? "has the tweak" : "unchanged")")
+                log("include: \(document.displayName ?? "") \(document.text.contains("tweak") ? "has the tweak" : "unchanged")")
             }
             log("include: tabs \(controller.window?.tabbedWindows?.count ?? 1), selected tab is the score: \(controller.window?.tabGroup?.selectedWindow === controller.window)")
             let disk = (try? String(contentsOfFile: dynamic.link.path, encoding: .utf8)) ?? ""
             log("include: saved with the tweak: \(disk.contains("tweak"))")
             finish("done")
+        }
+    }
+
+    /// Piano tables in the editor: Insert Piano Table on the empty line
+    /// of the score, typing cells with Tab between them (lined up as typed),
+    /// Add and Delete Table Column, then an engrave.
+    private static func tableSteps(_ controller: DocumentWindowController) {
+        let textView = controller.editor.textView
+        let document = controller.lilyDocument
+        func table() -> String {
+            let text = textView.nsString
+            guard let found = TableFormatter.table(containing: text.range(of: "\\pianoTable").location, in: text)
+            else { return "(no table)" }
+            return text.substring(with: text.lineRange(for: found.range))
+        }
+        func type(_ string: String) { textView.insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        let empty = textView.nsString.range(of: "  \n  r2").location
+        textView.setSelectedRange(NSRange(location: empty + 2, length: 0))
+        controller.insertPianoTable(nil)
+        let folder = document.fileURL!.deletingLastPathComponent()
+        log("table: include line \(document.text.contains("\\include \"piano-tables.ily\"")), file written \(FileManager.default.fileExists(atPath: folder.appendingPathComponent("piano-tables.ily").path))")
+        log("table: first cell selected “\(textView.nsString.substring(with: textView.selectedRange()))”")
+        // Upper row, then lower row: Tab selects the next cell.
+        for (index, cell) in ["c''16[", "s", "e''", "s", "s16", "g", "s", "c']"].enumerated() {
+            if index > 0 { textView.insertTab(nil) }
+            type(cell)
+        }
+        log("table: typed\n" + table())
+        snapshot(controller, "0-table-typed")
+        // The beam row: back to its letters with ⇧Tab from the first upper cell.
+        textView.setSelectedRange(NSRange(location: textView.nsString.range(of: "c''16[").location, length: 0))
+        textView.insertBacktab(nil)
+        log("table: ⇧Tab from the first cell selects “\(textView.nsString.substring(with: textView.selectedRange()))”")
+        textView.setSelectedRange(NSRange(location: textView.nsString.range(of: "e''").location, length: 0))
+        controller.addTableColumn(nil)
+        type("g''")
+        log("table: column added after e'' and typed\n" + table())
+        // Each step in its own run-loop pass, as keystrokes are: undo needs
+        // the pass's undo group closed.
+        after(0.3) {
+            controller.deleteTableColumn(nil)
+            log("table: column deleted\n" + table())
+            // (No Undo here: without events NSUndoManager keeps one group
+            // open for everything, so undo can't be checked faithfully.)
+            after(0.3) {
+                controller.engrave(mode: .preview) { result in
+                    let messages = (try? result.get().messages.map(\.message)) ?? []
+                    log("table: engraved \((try? result.get().succeeded) ?? false), messages \(messages)")
+                    after(1) {
+                        snapshot(controller, "0-table-engraved")
+                        finish("done")
+                    }
+                }
+            }
         }
     }
 
@@ -198,6 +290,7 @@ import QuartzCore
         log("adjusting: \(overlay.isOn)")
         snapshot(controller, "0-adjust-on")
         if ProcessInfo.processInfo.environment["FMAC_SELFTEST_INCLUDE"] != nil { return includeStep(controller) }
+        if ProcessInfo.processInfo.environment["FMAC_SELFTEST_TABLE"] != nil { return tableSteps(controller) }
         guard let accent = item(controller, { $0.grob == "Script" && $0.label == "accent" }) else { return finish("no accent") }
         checkMenuAndOption(controller)
         drag(controller, accent, by: NSPoint(x: 40, y: 25), name: "1-accent") {

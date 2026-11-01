@@ -47,6 +47,9 @@ public struct ScoreSpec: Equatable, Sendable {
     /// Nil: on for eight staves or more.
     public var hideEmptyStaves: Bool?
     public var midi = true
+    /// Pianos (one or more two-staff keyboards) typed as tables: both staves
+    /// in the right hand's music, with piano-tables.ily in the project.
+    public var pianoTables = false
 
     public init() {}
 
@@ -60,6 +63,7 @@ public struct ScoreSpec: Equatable, Sendable {
         grouping = ensemble.grouping
         instrumentNames = ensemble.instrumentNames
         makeParts = ensemble.makeParts
+        pianoTables = ensemble.pianoTables
         hideEmptyStaves = nil
         scoreStaffSize = nil
     }
@@ -354,9 +358,12 @@ public struct Ensemble: Hashable, Sendable, Identifiable {
     public let grouping: Grouping
     public let instrumentNames: InstrumentNames
     public let makeParts: Bool
+    /// The piano's music typed as tables.
+    public let pianoTables: Bool
 
     init(_ id: String, _ title: String, _ category: Category, _ instruments: [String],
-         grouping: Grouping = .byFamily, names: InstrumentNames = .fullThenShort, parts: Bool = true) {
+         grouping: Grouping = .byFamily, names: InstrumentNames = .fullThenShort, parts: Bool = true,
+         tables: Bool = false) {
         self.id = id
         self.title = title
         self.category = category
@@ -364,12 +371,14 @@ public struct Ensemble: Hashable, Sendable, Identifiable {
         self.grouping = grouping
         self.instrumentNames = names
         self.makeParts = parts
+        self.pianoTables = tables
     }
 
     public static func named(_ id: String) -> Ensemble? { all.first { $0.id == id } }
 
     public static let all: [Ensemble] = [
         Ensemble("piano", "Piano", .solo, ["piano"], names: .none),
+        Ensemble("piano-tables", "Piano (tables)", .solo, ["piano"], names: .none, tables: true),
         Ensemble("organ", "Organ", .solo, ["organ"], names: .none),
         Ensemble("guitar", "Guitar", .solo, ["guitar"], names: .none),
         Ensemble("guitar-tab", "Guitar with Tablature", .solo, ["guitar-tab"], names: .none),

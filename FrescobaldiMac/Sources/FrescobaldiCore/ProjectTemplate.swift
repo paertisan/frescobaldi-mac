@@ -27,16 +27,18 @@ public enum ProjectTemplate {
 
     /// The files to write, relative to the project folder. `name` is the
     /// project's (the folder's) name, which names the score file; the title
-    /// is the spec's, or `name` if it has none.
-    public static func files(for spec: ScoreSpec, name: String, version: LilyPondVersion?)
+    /// is the spec's, or `name` if it has none. `resources` is the app's
+    /// Resources folder, for piano-tables.ily (`spec.pianoTables`); without
+    /// it pianos get ordinary music.
+    public static func files(for spec: ScoreSpec, name: String, version: LilyPondVersion?, resources: URL? = nil)
         -> [(path: String, contents: String)] {
-        Writer(spec: spec, name: name, version: version).files()
+        Writer(spec: spec, name: name, version: version, resources: resources).files()
     }
 
     /// Writes the project into `folder`, which must not exist or be empty;
     /// its name names the score file. Returns the score file.
     @discardableResult
-    public static func write(_ spec: ScoreSpec, to folder: URL, version: LilyPondVersion?,
+    public static func write(_ spec: ScoreSpec, to folder: URL, version: LilyPondVersion?, resources: URL? = nil,
                              fileManager: FileManager = .default) throws -> URL {
         if fileManager.fileExists(atPath: folder.path) {
             let contents = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? ["?"]
@@ -48,7 +50,7 @@ public enum ProjectTemplate {
             }
         }
         let name = folder.lastPathComponent
-        for (path, contents) in files(for: spec, name: name, version: version) {
+        for (path, contents) in files(for: spec, name: name, version: version, resources: resources) {
             let url = folder.appendingPathComponent(path)
             try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(contents.utf8).write(to: url, options: .withoutOverwriting)
@@ -67,8 +69,10 @@ private struct Writer {
     /// Pianos and organs: their staves are called "right" and "left" unless
     /// there are several.
     let keyboards: Int
+    /// piano-tables.ily, when the pianos are typed as tables.
+    let pianoTables: String?
 
-    init(spec: ScoreSpec, name: String, version: LilyPondVersion?) {
+    init(spec: ScoreSpec, name: String, version: LilyPondVersion?, resources: URL?) {
         self.spec = spec
         main = ProjectTemplate.mainFileName(name: name)
         let title = spec.title.trimmingCharacters(in: .whitespaces)
@@ -77,10 +81,15 @@ private struct Writer {
         self.version = "\\version \"\(version?.description ?? "2.24.0")\""
         language = spec.language
         keyboards = players.filter { $0.instrument.kind == .grand || $0.instrument.kind == .organ }.count
+        let tables = spec.pianoTables && players.contains { $0.instrument.kind == .grand }
+        pianoTables = tables ? resources.flatMap {
+            try? String(contentsOf: $0.appendingPathComponent("LilyPond/\(TableFormatter.includeFile)"), encoding: .utf8)
+        } : nil
     }
 
     func files() -> [(path: String, contents: String)] {
         var files = [(main, score()), ("header.ily", header()), ("style.ily", style()), ("music/global.ily", global())]
+        if let pianoTables { files.append((TableFormatter.includeFile, pianoTables)) }
         for player in players {
             files.append(("music/\(player.file).ily", music(player)))
         }
@@ -115,6 +124,7 @@ private struct Writer {
         text += row("music/global.ily", "key, time signature, tempo and rehearsal marks")
         text += row("music/<player>.ily", "the music, one file per player")
         if spec.hasParts { text += row("parts/<player>.ly", "one part per player") }
+        if pianoTables != nil { text += row(TableFormatter.includeFile, "\\pianoTable, for typing the piano as tables") }
         text += """
             %
             % The .ily files name this file as their master, so engraving any of
@@ -200,6 +210,9 @@ private struct Writer {
             \\include "\(prefix)music/global.ily"
 
             """
+        if pianoTables != nil && players.contains(where: { $0.instrument.kind == .grand }) {
+            text += "\\include \"\(prefix)\(TableFormatter.includeFile)\"\n"
+        }
         for player in players { text += "\\include \"\(prefix)music/\(player.file).ily\"\n" }
         return text
     }
@@ -274,6 +287,8 @@ private struct Writer {
         var text = top(master: "../\(main)") + "\n"
         if let note = musicNote(player) { text += note }
         switch instrument.kind {
+        case .grand where pianoTables != nil:
+            text += tables(player)
         case .grand:
             text += variable(player.variable + "Right", clef: "treble", start: instrument.startPitch, player: player)
             text += "\n" + variable(player.variable + "Left", clef: "bass", start: Pitch(0), player: player)
@@ -323,6 +338,39 @@ private struct Writer {
         }
         if let clef { text += "  \\clef \(clefName(clef))\n" }
         return text + placeholder(rest: "r", multi: "R") + "}\n"
+    }
+
+    /// A piano typed as tables: a first bar of empty columns, one per beat,
+    /// in the right hand's music; the left hand only keeps its staff going.
+    private func tables(_ player: ResolvedPlayer) -> String {
+        var text = comment("""
+            The \(player.name.lowercased())'s two staves are typed together in \(player.variable)Right, as tables: \
+            a row per staff with \\col between the columns (Frescobaldi shows it as a thin bar; Tab moves \
+            between the cells), and over them where each column's beam goes: U above, D below, C between \
+            the staves, N no cross-staff, - as before. Pitches in tables are absolute (c' is middle C). \
+            See piano-tables.ily.
+            """) + "\n"
+        if keyboards > 1 {
+            text += "pianoTableStaves = #'(\"\(player.variable)Right\" . \"\(player.variable)Left\")\n\n"
+        }
+        let opening: (Pitch) -> String = { start in
+            switch spec.entry {
+            case .relative: "\\relative \(start.name(in: language)) {"
+            case .fixed: "\\fixed \(start.name(in: language)) {"
+            case .absolute: "{"
+            }
+        }
+        let beat = "\(spec.time.denominator)"
+        let table = TableFormatter.template(columns: spec.time.numerator, cell: "s" + beat, indent: "  ").text
+        let bar = spec.time.barDuration
+        let more = spec.bars > 1 ? "  R\(bar)" + (spec.bars > 2 ? "*\(spec.bars - 1)" : "") + " |\n" : ""
+        let pickup = spec.pickup.map { "  r\($0) |\n" } ?? ""
+        text += "\(player.variable)Right = \(opening(player.instrument.startPitch))\n  \\clef treble\n"
+        text += pickup + "  " + table + "\n" + more + "}\n\n"
+        text += "\(player.variable)Left = \(opening(Pitch(0)))\n  \\clef bass\n"
+        text += "  % The tables put this staff's notes in; rests where they don't.\n"
+        text += pickup + "  s\(bar) |\n" + more + "}\n"
+        return text
     }
 
     private func placeholder(rest: String, multi: String) -> String {

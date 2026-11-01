@@ -63,7 +63,7 @@ final class ScorePreview: ObservableObject {
         do {
             // Named as the project will be without a title of its own.
             let main = try ProjectTemplate.write(score, to: folder.appendingPathComponent("\(run)/Untitled Score"),
-                                                 version: AppDelegate.shared.lilypondVersion)
+                                                 version: AppDelegate.shared.lilypondVersion, resources: AppResources.root)
             let job = EngraveJob(lilypond: lilypond, source: main, mode: .publish)
             try job.start(output: { _ in }, completion: { result in
                 DispatchQueue.main.async {

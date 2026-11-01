@@ -195,6 +195,11 @@ import Testing
     }
 
     /// Settings to engrave: every preset, plus combinations of the options.
+    /// The app's Resources folder (for piano-tables.ily).
+    static let resources = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Resources")
+
     static let cases: [(String, ScoreSpec)] = {
         var cases = Ensemble.all.map { ($0.id, ScoreSpec(ensemble: $0)) }
         var spec = ScoreSpec(ensemble: Ensemble.named("orchestra")!)
@@ -244,18 +249,58 @@ import Testing
         spec.players = Instrument.all.map { Player(instrument: $0.id) }
         spec.paperSize = "tabloid"
         cases.append(("every instrument", spec))
+        spec = ScoreSpec(ensemble: Ensemble.named("piano-tables")!)
+        spec.time = TimeSignature(6, 8)
+        spec.pickup = "8"
+        spec.entry = .absolute
+        cases.append(("piano tables, 6/8, pickup, absolute", spec))
+        spec = ScoreSpec(ensemble: Ensemble.named("violin-piano")!)
+        spec.players.append(Player(instrument: "piano"))
+        spec.pianoTables = true
+        spec.bars = 1
+        cases.append(("violin and two pianos as tables, one bar", spec))
         return cases
     }()
 
     private func write(_ spec: ScoreSpec) throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ProjectTemplate-\(UUID().uuidString.prefix(8))/Test Piece")
-        for (path, contents) in ProjectTemplate.files(for: spec, name: "Test Piece", version: LilyPondVersion(2, 26, 0)) {
+        for (path, contents) in ProjectTemplate.files(for: spec, name: "Test Piece", version: LilyPondVersion(2, 26, 0),
+                                                      resources: Self.resources) {
             let url = root.appendingPathComponent(path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(contents.utf8).write(to: url)
         }
         return root
+    }
+
+    @Test func pianoTables() throws {
+        let spec = ScoreSpec(ensemble: Ensemble.named("piano-tables")!)
+        #expect(spec.pianoTables)
+        let files = Dictionary(uniqueKeysWithValues: ProjectTemplate.files(
+            for: spec, name: "Etude", version: LilyPondVersion(2, 26, 0), resources: Self.resources).map { ($0.path, $0.contents) })
+        let include = try #require(files["piano-tables.ily"])
+        #expect(include.contains("pianoTable ="))
+        let score = try #require(files["etude.ly"])
+        #expect(score.contains("\\include \"music/global.ily\"\n\\include \"piano-tables.ily\"\n\\include \"music/piano.ily\""))
+        let music = try #require(files["music/piano.ily"])
+        #expect(music.contains("""
+            pianoRight = \\relative c'' {
+              \\clef treble
+              \\pianoTable
+                #'(    C       -       -       - )
+                { \\col s4 \\col s4 \\col s4 \\col s4 \\col }
+                { \\col s4 \\col s4 \\col s4 \\col s4 \\col }
+              R1*3 |
+            }
+            """))
+        #expect(music.contains("pianoLeft = \\relative c {\n  \\clef bass\n"))
+        #expect(music.contains("  s1 |\n  R1*3 |\n}"))
+        #expect(!music.contains("pianoTableStaves"), "one piano: the default staff names")
+        // Without the app's resources: ordinary piano music.
+        let plain = ProjectTemplate.files(for: spec, name: "Etude", version: nil)
+        #expect(!plain.contains { $0.path == "piano-tables.ily" })
+        #expect(!(plain.first { $0.path == "etude.ly" }?.contents.contains("piano-tables") ?? true))
     }
 
     /// Every generated project is tidy by the project navigator's standards.

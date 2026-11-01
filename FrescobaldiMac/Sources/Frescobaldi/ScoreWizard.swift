@@ -15,6 +15,11 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private let model = ScoreWizardModel()
+
+    #if DEBUG
+    /// For AdjustSelfTest.
+    static var shownForTesting: (window: NSWindow?, model: ScoreWizardModel)? { current.map { ($0.window, $0.model) } }
+    #endif
     private var themeObserver: Any?
 
     /// The same appearance and window color as the document windows.
@@ -71,7 +76,8 @@ final class ScoreWizardWindowController: NSWindowController, NSWindowDelegate {
 
     private func create(at folder: URL) {
         do {
-            let main = try ProjectTemplate.write(model.spec, to: folder, version: AppDelegate.shared.lilypondVersion)
+            let main = try ProjectTemplate.write(model.spec, to: folder, version: AppDelegate.shared.lilypondVersion,
+                                                 resources: AppResources.root)
             model.remember()
             // Show the new project's files.
             UserDefaults.standard.set("project", forKey: "sidebarMode")
@@ -118,7 +124,8 @@ final class ScoreWizardModel: ObservableObject {
     /// The preset these players are, if they are one.
     var preset: Ensemble? {
         let instruments = spec.players.map(\.instrument)
-        return Ensemble.all.first { $0.instruments == instruments }
+        return Ensemble.all.first { $0.instruments == instruments && $0.pianoTables == spec.pianoTables }
+            ?? Ensemble.all.first { $0.instruments == instruments }
     }
 
     func choose(_ ensemble: Ensemble) {
@@ -215,6 +222,7 @@ final class ScoreWizardModel: ObservableObject {
             var paperSize: String
             var tagline: Bool
             var midi: Bool
+            var pianoTables: Bool?
         }
 
         static func load(into spec: inout ScoreSpec) {
@@ -222,7 +230,10 @@ final class ScoreWizardModel: ObservableObject {
                   let values = try? JSONDecoder().decode(Values.self, from: data) else { return }
             let players = values.players.filter { Instrument.named($0.instrument) != nil }
             if !players.isEmpty {
-                if let ensemble = Ensemble.all.first(where: { $0.instruments == players.map(\.instrument) }) {
+                let tables = values.pianoTables ?? false
+                if let ensemble = Ensemble.all.first(where: {
+                    $0.instruments == players.map(\.instrument) && $0.pianoTables == tables
+                }) ?? Ensemble.all.first(where: { $0.instruments == players.map(\.instrument) }) {
                     spec.apply(ensemble)
                 } else {
                     spec.instrumentNames = .fullThenShort
@@ -230,6 +241,7 @@ final class ScoreWizardModel: ObservableObject {
                 }
                 spec.players = players
                 spec.grouping = values.grouping
+                spec.pianoTables = values.pianoTables ?? false
             }
             spec.composer = values.composer
             spec.language = PitchLanguage(rawValue: values.language) ?? spec.language
@@ -245,7 +257,8 @@ final class ScoreWizardModel: ObservableObject {
             let values = Values(players: spec.players, grouping: spec.grouping, composer: spec.composer,
                                 language: spec.language.rawValue, entry: spec.entry.rawValue,
                                 concertPitch: spec.concertPitch, transposedScore: spec.transposedScore,
-                                paperSize: spec.paperSize, tagline: spec.tagline, midi: spec.midi)
+                                paperSize: spec.paperSize, tagline: spec.tagline, midi: spec.midi,
+                                pianoTables: spec.pianoTables)
             if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: key) }
         }
     }
@@ -583,6 +596,10 @@ private struct MusicStep: View {
                 }
                 Picker("Octaves", selection: $spec.entry) {
                     ForEach(EntryMode.allCases) { Text($0.title).tag($0) }
+                }
+                if spec.resolvedPlayers.contains(where: { $0.instrument.kind == .grand }) {
+                    Toggle("Type the piano as tables", isOn: $spec.pianoTables)
+                        .help("Both staves typed together, a row per staff, with beams across the staves (\\pianoTable)")
                 }
                 if spec.hasKeyTransposingInstruments {
                     Picker("Transposing instruments", selection: $spec.concertPitch) {

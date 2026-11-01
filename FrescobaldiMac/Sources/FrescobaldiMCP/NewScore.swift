@@ -60,6 +60,7 @@ enum NewScoreArguments {
                                             oneOf: Grouping.allCases.map(\.rawValue)),
         "hide_empty_staves": FrescobaldiTools.boolean("Leave out staves with only rests after the first system (default: from eight staves)."),
         "midi": FrescobaldiTools.boolean("Write a MIDI file (default true)."),
+        "piano_tables": FrescobaldiTools.boolean("Type pianos as tables (\\pianoTable: both staves in the right hand's music, with cross-staff beams); writes piano-tables.ily into the project. Default false, true for the piano-tables ensemble."),
         "open": FrescobaldiTools.boolean("Open the score in Frescobaldi if it's running (default true)."),
     ], required: ["path"])
 
@@ -150,6 +151,7 @@ enum NewScoreArguments {
         }
         if let hide = arguments["hide_empty_staves"]?.bool { spec.hideEmptyStaves = hide }
         spec.midi = arguments["midi"]?.bool ?? true
+        if let tables = arguments["piano_tables"]?.bool { spec.pianoTables = tables }
         return spec
     }
 

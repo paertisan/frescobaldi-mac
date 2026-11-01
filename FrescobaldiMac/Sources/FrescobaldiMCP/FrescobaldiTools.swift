@@ -399,8 +399,9 @@ private struct Context: Sendable {
         let folder = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
         let spec = try NewScoreArguments.spec(arguments)
         let version = await blockingValue { environment.lilypond().flatMap(LilyPondLocator.version(of:)) }
-        let main = try ProjectTemplate.write(spec, to: folder, version: version)
-        let files = ProjectTemplate.files(for: spec, name: folder.lastPathComponent, version: version).map(\.path)
+        let main = try ProjectTemplate.write(spec, to: folder, version: version, resources: environment.resources)
+        let files = ProjectTemplate.files(for: spec, name: folder.lastPathComponent, version: version,
+                                          resources: environment.resources).map(\.path)
         var opened = false
         if arguments["open"]?.bool != false {
             opened = (try? await callBridge("openDocument", ["path": .string(main.path), "project": true])) != nil
