@@ -14,7 +14,7 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
-PYTHON_LY_DIR=build/python swift test   # 76 core + 12 MCP tests, python-ly ones included
+PYTHON_LY_DIR=build/python swift test   # 127 core + 14 MCP tests, python-ly and LilyPond ones included
 ```
 
 The app compiled on the first try. None of the expected problems below
@@ -254,6 +254,52 @@ in Charcoal (dark) and Ivory (light).
 - [ ] Engrave as a prominent (tinted) toolbar button: macOS 26's
       `NSToolbarItem.style = .prominent` showed no effect on macOS 27, so
       it isn't used.
+
+## 2h. Adjusting objects in the preview
+
+Checked on 2026-11-01 with LilyPond 2.26.0. Screen control was declined
+for this session, so the app was driven by the debug build's self-test
+(`FMAC_SELFTEST`, see README > Building) instead of the mouse: it runs the
+real hit testing, drag loop, edit and engrave with posted mouse events and
+saves window snapshots. Run in Ivory (light, `NSRequiresAquaSystemAppearance`)
+and Charcoal (dark), on a two-staff piano score with every kind of object
+and on a score whose notes are in an `\include`d file.
+
+- [x] Tests: link parsing, every `TweakWriter` case, the settings file only
+      in preview mode; engraving with `fmac-edit.ly` links all 11 kinds of
+      object with no new warnings, an `extra-offset` drag moves the
+      object's rectangle by the dragged points (±0.5 pt) and a second drag
+      updates the same tweak, and one tweak of every kind engraves without
+      warnings with the values reaching the right objects.
+- [x] Layout unchanged: the 58-page Mahler 9/I score (a scratch copy) has
+      identical point-and-click rectangles (45,681) and warnings (40) with
+      and without the file; 17,641 objects are linked. 103.7 s instead of
+      103.1 s to engrave; the PDF is 22.2 MB instead of 14.8 MB.
+- [x] The toolbar's Adjust toggle shows selected (clay in Ivory), and the
+      status says "Drag to adjust · right-click for options" for 4 s.
+- [x] Hover outlines the object in clay; slurs and beams show handles
+      instead. Tooltip text "Dynamic · p · line 4".
+- [x] Dragging: the object fades in place and a copy follows the pointer;
+      a slur handle shows the new curve and control polygon; a beam end
+      shows the tilted beam.
+- [x] Release writes, as one undoable change ("Undo Adjust Beam"), and
+      engraves again: `-\tweak extra-offset #'(5.02 . 3.14)` on an accent,
+      `-\tweak DynamicLineSpanner.staff-padding #3.86` on `\p`,
+      `-\shape #'((0 . 0) (0 . 0) (0 . 3.76) (0 . 0))` on a slur,
+      `\once \offset positions #'(2.51 . 0) Beam` before an automatic beam.
+- [x] Right-click menu: "Dragging a dynamic changes" with Offset (ticked),
+      X-offset, Y-offset, Padding, Distance from Staff, Outside-Staff
+      Padding, and Show in Source.
+- [x] With Adjust off the preview behaves as before; ⌥ held turns it on.
+- [x] A dynamic in `music.ily`: the file opens as a second tab, takes the
+      tweak and is saved and engraved; the score's tab stays selected.
+- [x] Bug found and fixed: the engrave right after the edit didn't save
+      the file (NSDocument counts the change a moment later), so it
+      engraved the old text. It now starts on the next run-loop pass.
+- [ ] By hand with a real mouse and keyboard: pressing ⌥, the tooltip
+      appearing, the context menu opening, the hand cursors, Shift to keep
+      a drag straight, dragging near the edge (no autoscroll yet).
+- [ ] Adjust on a large score in the app: the self-test used small ones.
 
 ## 3. Things to look at closely
 

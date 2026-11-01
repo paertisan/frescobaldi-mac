@@ -9,9 +9,11 @@ implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 (Swift 6.4) and was tested by hand on macOS 27 with LilyPond 2.26.0:
 editing, engraving, point-and-click both ways, issues, MIDI, the Tools
 menu, templates and Settings all work, in light and dark mode.
-`FrescobaldiCore` passes its 76 tests on macOS and on Linux (Swift 6.2), and
-the MCP server its 12 on macOS. Claude can work with scores through the
-bundled MCP server (see below).
+`FrescobaldiCore` passes its 127 tests on macOS (the ones that engrave need
+LilyPond, the PDF ones PDFKit; the rest are meant to run on Linux too, last
+checked there at 76 tests with Swift 6.2), and the MCP server its 14 on
+macOS. Claude can work with scores through the bundled MCP server (see
+below).
 [MAC-CHECKLIST.md](MAC-CHECKLIST.md) lists what was checked and what is
 still open.
 
@@ -226,6 +228,83 @@ warnings, score and parts (`ProjectTemplateTests`). Blank staff paper
 ([#1139](https://github.com/frescobaldi/frescobaldi/issues/1139)) was
 already a template: File > New from Template > Blank Music Paper.
 
+## Adjusting objects in the preview
+
+Drag articulations, dynamics, texts, fingerings, hairpins, pedal marks,
+tuplet brackets, slurs, ties and beams in the PDF preview, and the app
+writes the change into the source as plain LilyPond: a `-\tweak`, a
+`-\shape`, an `\offset`, or an override before the note. The score keeps
+compiling with plain LilyPond anywhere; nothing needs an include file.
+
+The idea comes from Paolo Prete's
+[Spontini Editor](https://github.com/paopre/Spontini), which does this in a
+browser on LilyPond's SVG output with its own `\jsTweak` commands. This is a
+separate implementation from its documentation and behaviour (no Spontini
+code or `.ly` files; Spontini is GPL-3.0) that works on the PDF preview.
+
+**Using it.** Turn on Adjust in the toolbar (View > Adjust Objects in
+Preview, ⇧⌘A), or hold ⌥ for one drag. The object under the pointer gets a
+thin clay outline and a tooltip ("Dynamic · mf · line 12", plus the file
+name when it's in an included file). Dragging shows the object following
+the pointer; on release the tweak is written as one undoable change (Edit >
+Undo Adjust Dynamic) and the score engraves again. Shift keeps the drag
+horizontal or vertical. A click without dragging shows the object in the
+source. Slurs, phrasing slurs and ties show their four control points and
+beams their two ends as handles. Objects written in an included file are
+changed there: the file opens as a tab behind the score's (the change is
+undone in that tab). A drag is refused, with a word in the toolbar, while
+an engrave runs or when the source changed since the preview.
+
+**What a drag writes.** A plain drag sets `extra-offset`. Right-click an
+object to choose instead X-offset, Y-offset, Padding, Distance from Staff
+(`staff-padding`) or Outside-Staff Padding, as far as the object has them;
+the choice is kept per kind of object until the app quits. The
+collision-aware properties of dynamics, hairpins and pedals go to their
+`DynamicLineSpanner` / `SustainPedalLineSpanner`, on the event that made
+that spanner (for `\p\<` that's the hairpin). Values are rounded to 0.01
+staff space; moves under 0.05 staff space are ignored. A second drag
+updates the tweak that's there instead of adding one.
+
+| Object | Source | Becomes |
+|---|---|---|
+| Articulation, dynamic, text, fingering, hairpin, pedal | `c4->`, `c4^.`, `f\p`, `a^"dolce"`, `g-1` | `c4-\tweak extra-offset #'(1.2 . -0.5) ->`, `c4-\tweak extra-offset #'(…) ^.` |
+| Collision property of a dynamic | `c4\p\<` | `c4\p-\tweak DynamicLineSpanner.staff-padding #3.1 \<` |
+| Slur, phrasing slur, tie (handle) | `c8( d e f)` | `c8-\shape #'((0 . 0) (0 . 1.5) (0 . 1.5) (0 . 0)) ( d e f)`; for a slur broken across lines, `#'(() ((…)))` for the second piece |
+| Beam end | `c8[ d e f]` | `c8-\offset positions #'(1 . 0) [ d e f]` |
+| Automatic beam (no `[`) | `c8 d e f` | `\once \offset positions #'(1 . 0) Beam c8 d e f` (before the chord in `<c e>8`) |
+| Tuplet bracket | `\tuplet 3/2 { … }` | `\tweak TupletBracket.padding #1.2 \tuplet 3/2 { … }` |
+
+**How it works.** Preview engraves (never Engrave for Publishing, Export
+PDF or build commands) pass `-dinclude-settings=Resources/LilyPond/fmac-edit.ly`
+(LilyPond 2.24 or later; a project's own `-dinclude-settings` wins). Its
+Score engraver wraps the stencil of each of these grobs with an invisible
+`url-link` (what `\with-url` draws), so PDFKit gives an annotation with the
+object's exact rectangle. The URL, `fmac://grob?name=…&line=…&char=…&…&file=…`,
+holds the event's location (0-based character column; the start of any
+tweaks already on it), the event class, a label, the units (mm per staff
+space and per LilyPond unit), the stencil's extents, and the values a drag
+starts from: `extra-offset`, the X and Y offsets, `padding`,
+`staff-padding`, `outside-staff-padding` and `direction` (of the side
+spanner where there is one), slur control points and beam positions, and
+which piece of a broken spanner it is. The URL is built in a
+`delay-stencil-evaluation` stencil, so it's computed when the page is
+written, after layout: reading the offsets can't change the layout or add
+warnings. On the 58-page Mahler 9/I score the PDF has the same 45,681
+point-and-click rectangles and the same 40 warnings with and without the
+file, plus 17,641 adjustable objects; it engraves in 103.7 s instead of
+103.1 s (CPU time +4%), and the PDF grows from 14.8 to 22.2 MB. `GrobLink` (Core) parses the URL and
+turns a drag into a `Tweak`; `TweakWriter` (Core) writes it as one minimal
+replacement using the source text, LilyPond's columns (tabs count as one
+character, columns are Unicode characters) and the lexer for chords.
+
+**Limits.** Moving an object that comes from a variable or a music function
+tweaks its definition, which changes every use. Tweaks are written where
+LilyPond says the event is, so a drag after editing without engraving is
+refused rather than guessed. A `\shape` or `\offset` value written as Scheme
+code (`#(list …)`) isn't merged; the drag says so. Undo of a change in an
+included file is in that file's tab. No MCP tool for it yet: Claude can
+write the same tweaks with `edit_document`.
+
 ## Design
 
 The window aims for the quiet, content-first look of apps like Claude's
@@ -294,6 +373,21 @@ LilyPond.
   only its bounds.
 - SwiftUI hosting controllers inside split view items need
   `sizingOptions = []`, or the window shrinks to their ideal sizes.
+- `-\tweak prop val` goes before a post-event *with* its direction:
+  `c4-\tweak extra-offset #'(1 . 2) ^.` works, but `c4^\tweak … .` and
+  `c4^\tweak … \markup …` are syntax errors.
+- An event's `origin` points at the start of the tweaks already on it
+  (`-` of `-\tweak`, `\` of `\tweak TupletBracket.padding … \tuplet`).
+  `ly:input-file-line-char-column` gives (file line char column): char
+  counts a tab as one, column expands it.
+- The `DynamicLineSpanner` of `\p\<` is caused by the hairpin; a
+  `-\tweak DynamicLineSpanner.staff-padding` on the `\p` does nothing.
+- `extra-offset` is in staff spaces of the object's staff (`\magnifyStaff #2`
+  doubles it). `\shape` scales y by staff space only in its single-list
+  form, and a single list on a broken slur shapes the first piece only.
+- Unset `outside-staff-padding` behaves as 0.46.
+- A `delay-stencil-evaluation` stencil is forced when the page is output
+  (after "Drawing systems..."), not by skyline or extent calculations.
 - `python3 -m ly "transpose c d"` and `ly "translate english"` read stdin and
   write stdout. Languages: nederlands, catalan, deutsch, english, espanol,
   italiano, norsk, portugues, suomi, svenska, vlaams.
@@ -322,6 +416,18 @@ PYTHON_LY_DIR=build/python swift test
   templates, the python-ly driver and python-ly into the bundle
 - ad-hoc signs the bundle
 
+A debug build (`CONFIG=debug scripts/build-app.sh`) can drive Adjust in
+the running app without screen control, for checking it after changes:
+
+```bash
+FMAC_SELFTEST=/path/to/score.ly FMAC_SELFTEST_OUT=/tmp/adjust build/Frescobaldi.app/Contents/MacOS/Frescobaldi
+```
+
+It opens the score, engraves, drags an articulation, a dynamic, a slur
+handle and a beam end with posted mouse events, undoes the last one, and
+writes window snapshots and `report.txt` (it edits the score: use a copy).
+`FMAC_SELFTEST_INCLUDE=1` drags an object from an included file instead.
+
 The python-ly tests are skipped unless python-ly is found: they use
 `$PYTHON_LY_DIR` or `build/python`.
 
@@ -332,11 +438,11 @@ target is macOS-only in `Package.swift`.
 
 | Path | What |
 |---|---|
-| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`) |
-| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge`, `ScoreWizard` (+ `ScoreWizardPreview`) |
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`), `GrobLink` + `AdjustProperty` (preview objects), `TweakWriter` (+ `Tweak`) |
+| `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge`, `ScoreWizard` (+ `ScoreWizardPreview`), `AdjustOverlay` (dragging in the preview), `AdjustSelfTest` (debug builds only) |
 | `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport`, `NewScore` (`new_score` arguments) |
 | `Sources/frescobaldi-mcp` | The helper's `main.swift` |
-| `Resources` | Templates, themes (`Themes/rainglow.json` + license) and the python-ly driver, copied into the bundle |
+| `Resources` | Templates, themes (`Themes/rainglow.json` + license), the python-ly driver and `LilyPond/fmac-edit.ly` (preview links), copied into the bundle |
 | `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
 | `scripts/import-jetbrains-themes.py` | Converts JetBrains color schemes into a theme collection |
 
