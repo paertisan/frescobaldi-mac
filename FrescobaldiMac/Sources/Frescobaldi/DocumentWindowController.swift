@@ -365,6 +365,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         case #selector(toggleAdjust(_:)):
             item.state = preview.adjustOverlay.isOn ? .on : .off
             return true
+        case #selector(addTableColumn(_:)), #selector(deleteTableColumn(_:)):
+            return TableFormatter.table(containing: editor.textView.selectedRange().location,
+                                        in: editor.textView.nsString) != nil
         default:
             return true
         }
@@ -404,6 +407,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
                 untitledSource = source
                 try Data(lilyDocument.text.utf8).write(to: source)
+                // Its piano tables' include, which a saved file has beside it.
+                if lilyDocument.text.contains(TableFormatter.includeFile), let include = AppResources.pianoTables {
+                    let copy = untitledDirectory.appendingPathComponent(TableFormatter.includeFile)
+                    try? FileManager.default.removeItem(at: copy)
+                    try FileManager.default.copyItem(at: include, to: copy)
+                }
                 let job = EngraveJob(lilypond: lilypond, source: source, mode: mode,
                                      previewSettings: AppResources.adjustSettings)
                 start(EngraveRun(jobs: [job], names: [name]),
@@ -1024,6 +1033,93 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// The toolbar's Engrave button, which stops a run in progress.
     @objc func engraveOrStop(_ sender: Any?) {
         if engraveModel.isRunning { stopEngraving(sender) } else { engravePreview(sender) }
+    }
+
+    // MARK: Piano tables
+
+    /// Tools > Insert Piano Table: a table at the insertion point, with its
+    /// first cell selected. Writes piano-tables.ily beside the document and
+    /// includes it, unless the project includes it already. One undo step.
+    @objc func insertPianoTable(_ sender: Any?) {
+        let textView = editor.textView
+        let text = textView.nsString
+        var selection = textView.selectedRange()
+        let line = text.lineRange(for: NSRange(location: selection.location, length: 0))
+        let lineText = text.substring(with: line)
+        let indent = String(lineText.prefix { $0 == " " || $0 == "\t" })
+        let before = text.substring(with: NSRange(location: line.location, length: selection.location - line.location))
+        var lineEnd = NSMaxRange(line)
+        while lineEnd > line.location, [0x0A, 0x0D].contains(text.character(at: lineEnd - 1)) { lineEnd -= 1 }
+        let after = NSMaxRange(selection) < lineEnd
+            ? text.substring(with: NSRange(location: NSMaxRange(selection), length: lineEnd - NSMaxRange(selection))) : ""
+        let (table, cell) = TableFormatter.template(columns: 4, indent: indent)
+        var insertion = table
+        var cellLocation = cell.location
+        if !before.trimmingCharacters(in: .whitespaces).isEmpty {
+            insertion = "\n" + indent + insertion
+            cellLocation += 1 + (indent as NSString).length
+        } else if before.isEmpty && !indent.isEmpty {
+            insertion = indent + insertion
+            cellLocation += (indent as NSString).length
+        }
+        if !after.trimmingCharacters(in: .whitespaces).isEmpty { insertion += "\n" + indent }
+
+        let include = projectIncludesPianoTables ? nil : TableFormatter.includeEdit(in: text)
+        if include != nil {
+            do {
+                try writePianoTablesInclude()
+            } catch {
+                presentError(error)
+                return
+            }
+        }
+        let undo = lilyDocument.undoManager
+        undo?.beginUndoGrouping()
+        if let include {
+            textView.replace(include.range, with: include.replacement)
+            if include.range.location <= selection.location {
+                selection.location += (include.replacement as NSString).length
+            }
+        }
+        textView.replace(selection, with: insertion,
+                         selection: NSRange(location: selection.location + cellLocation, length: cell.length))
+        undo?.setActionName("Insert Piano Table")
+        undo?.endUndoGrouping()
+        textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
+    @objc func addTableColumn(_ sender: Any?) {
+        editTable(TableFormatter.addColumn, name: "Add Table Column")
+    }
+
+    @objc func deleteTableColumn(_ sender: Any?) {
+        editTable(TableFormatter.deleteColumn, name: "Delete Table Column")
+    }
+
+    private func editTable(_ edit: (Int, NSString) -> TextEditing.Edit?, name: String) {
+        let textView = editor.textView
+        guard let change = edit(textView.selectedRange().location, textView.nsString) else {
+            NSSound.beep()
+            return
+        }
+        textView.replace(change.range, with: change.replacement, selection: change.selection, actionName: name)
+    }
+
+    /// The file or a file of its project includes piano-tables.ily.
+    private var projectIncludesPianoTables: Bool {
+        if lilyDocument.text.contains(TableFormatter.includeFile) { return true }
+        return projectModel.project?.includedPaths.contains { $0.hasSuffix("/" + TableFormatter.includeFile) } ?? false
+    }
+
+    /// Copies the bundled piano-tables.ily beside the document, unless one
+    /// is there (it may have been changed). Untitled documents get theirs
+    /// when they're engraved.
+    private func writePianoTablesInclude() throws {
+        guard let folder = lilyDocument.fileURL?.deletingLastPathComponent(),
+              let source = AppResources.pianoTables else { return }
+        let destination = folder.appendingPathComponent(TableFormatter.includeFile)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return }
+        try FileManager.default.copyItem(at: source, to: destination)
     }
 
     // MARK: Adjusting objects

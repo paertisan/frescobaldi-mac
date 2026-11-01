@@ -51,6 +51,11 @@ final class SyntaxHighlighter {
         let theme = EditorTheme.current
         for line in first...last {
             state = LilyPondLexer.lex(text, range: lines.range(ofLine: line), from: state) { token in
+                // A piano table's \col: the text view draws a thin bar instead.
+                if token.range.length == 4, text.substring(with: token.range) == TableFormatter.marker {
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.clear, forCharacterRange: token.range)
+                    return
+                }
                 if let color = theme.color(for: token.kind) {
                     layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: token.range)
                 }

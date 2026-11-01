@@ -171,6 +171,10 @@ enum MainMenu {
         menu.addItem(.separator())
         add(menu, "Re-indent", #selector(DocumentWindowController.reindent(_:)), "i", [.command, .control])
         add(menu, "Reformat", #selector(DocumentWindowController.reformat(_:)))
+        menu.addItem(.separator())
+        add(menu, "Insert Piano Table", #selector(DocumentWindowController.insertPianoTable(_:)))
+        add(menu, "Add Table Column", #selector(DocumentWindowController.addTableColumn(_:)), "]", [.command, .control])
+        add(menu, "Delete Table Column", #selector(DocumentWindowController.deleteTableColumn(_:)), "[", [.command, .control])
         return menu
     }
 

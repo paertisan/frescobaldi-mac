@@ -58,6 +58,7 @@ final class LilyTextView: NSTextView {
     /// Highlights the line with the insertion point, if the theme does.
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+        defer { drawTableColumns(in: rect) }
         guard let color = EditorTheme.current.currentLine, selectedRange().length == 0,
               let layoutManager else { return }
         let length = nsString.length
@@ -77,8 +78,13 @@ final class LilyTextView: NSTextView {
         line.intersection(rect).fill()
     }
 
+    /// True while `replace` changes the text (not the user typing).
+    private(set) var isReplacing = false
+
     /// One undoable replacement, selecting `selection` afterwards.
     func replace(_ range: NSRange, with replacement: String, selection: NSRange? = nil, actionName: String? = nil) {
+        isReplacing = true
+        defer { isReplacing = false }
         // Close the undo group right away instead of at the end of the event,
         // so the document counts the change at once: an engrave requested
         // right after (by Claude, say) must see it and save first.
@@ -129,9 +135,16 @@ final class LilyTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
-    /// Tab inserts spaces up to the next indentation stop.
+    /// Tab inserts spaces up to the next indentation stop; in a piano
+    /// table it selects the next cell.
     override func insertTab(_ sender: Any?) {
         let selection = selectedRange()
+        if !nsString.substring(with: selection).contains("\n"),
+           let cell = TableFormatter.cell(after: NSMaxRange(selection), in: nsString) {
+            setSelectedRange(cell)
+            scrollRangeToVisible(cell)
+            return
+        }
         if selection.length > 0 && nsString.substring(with: selection).contains("\n") {
             shiftRight(sender)
             return
@@ -143,7 +156,46 @@ final class LilyTextView: NSTextView {
     }
 
     override func insertBacktab(_ sender: Any?) {
+        let selection = selectedRange()
+        if !nsString.substring(with: selection).contains("\n"),
+           TableFormatter.table(containing: selection.location, in: nsString) != nil {
+            if let cell = TableFormatter.cell(after: selection.location, backwards: true, in: nsString) {
+                setSelectedRange(cell)
+                scrollRangeToVisible(cell)
+            }
+            return
+        }
         shiftLeft(sender)
+    }
+
+    /// Piano tables' `\col` as a thin bar (the highlighter hides the text).
+    private func drawTableColumns(in rect: NSRect) {
+        guard let layoutManager, let container = textContainer else { return }
+        let text = nsString
+        let glyphs = layoutManager.glyphRange(forBoundingRect: rect.offsetBy(dx: -textContainerOrigin.x,
+                                                                             dy: -textContainerOrigin.y), in: container)
+        let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard chars.length > 0, text.range(of: TableFormatter.marker, options: [], range: chars).location != NSNotFound
+        else { return }
+        EditorTheme.current.gutterText.withAlphaComponent(0.7).setFill()
+        var search = chars
+        while search.length > 0 {
+            let found = text.range(of: TableFormatter.marker, options: [], range: search)
+            guard found.location != NSNotFound else { break }
+            let next = NSMaxRange(found) < text.length ? text.character(at: NSMaxRange(found)) : 0x20
+            let isWord = (next >= 0x41 && next <= 0x5A) || (next >= 0x61 && next <= 0x7A)
+            // Only where the highlighter hid it (not in comments or strings).
+            let hidden = (layoutManager.temporaryAttribute(.foregroundColor, atCharacterIndex: found.location,
+                                                           effectiveRange: nil) as? NSColor) == .clear
+            if !isWord && hidden {
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: found, actualCharacterRange: nil)
+                var box = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+                box = box.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+                let width: CGFloat = 1.5
+                NSRect(x: (box.midX - width / 2).rounded(), y: box.minY + 1, width: width, height: box.height - 2).fill()
+            }
+            search = NSRange(location: NSMaxRange(found), length: NSMaxRange(chars) - NSMaxRange(found))
+        }
     }
 
     // MARK: Commands (Format menu)

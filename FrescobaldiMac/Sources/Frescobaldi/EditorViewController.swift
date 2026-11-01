@@ -198,6 +198,26 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
 
     // MARK: NSTextViewDelegate
 
+    private var liningUpTable = false
+
+    /// Typing in a piano table lines its columns up again, in the same undo
+    /// step as the keystroke.
+    func textDidChange(_ notification: Notification) {
+        guard !liningUpTable, !textView.isReplacing, !textView.hasMarkedText(),
+              let undo = document.undoManager, !undo.isUndoing, !undo.isRedoing else { return }
+        let text = textView.nsString
+        let selection = textView.selectedRange()
+        guard text.range(of: "\\pianoTable").location != NSNotFound,
+              let edit = TableFormatter.format(at: selection.location, in: text, selection: selection),
+              textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) else { return }
+        liningUpTable = true
+        defer { liningUpTable = false }
+        textView.textStorage?.replaceCharacters(in: edit.range, with: NSAttributedString(
+            string: edit.replacement, attributes: EditorStyle.baseAttributes))
+        textView.didChangeText()
+        textView.setSelectedRange(edit.selection)
+    }
+
     func textViewDidChangeSelection(_ notification: Notification) {
         ruler.needsDisplay = true
         // The current-line highlight moves with the insertion point.

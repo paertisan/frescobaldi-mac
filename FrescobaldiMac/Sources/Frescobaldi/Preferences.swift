@@ -101,6 +101,13 @@ enum AppResources {
 
     static var templates: URL { root.appendingPathComponent("Templates", isDirectory: true) }
 
+    /// piano-tables.ily, which Insert Piano Table and the New Score
+    /// wizard copy into projects.
+    static var pianoTables: URL? {
+        let url = root.appendingPathComponent("LilyPond/piano-tables.ily")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     /// The settings file that makes objects in the preview draggable
     /// (Resources/LilyPond/fmac-edit.ly), for preview engraves with
     /// LilyPond 2.24 or later. Nil if it's missing.
