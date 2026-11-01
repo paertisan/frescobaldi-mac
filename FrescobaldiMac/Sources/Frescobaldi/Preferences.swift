@@ -101,6 +101,16 @@ enum AppResources {
 
     static var templates: URL { root.appendingPathComponent("Templates", isDirectory: true) }
 
+    /// The settings file that makes objects in the preview draggable
+    /// (Resources/LilyPond/fmac-edit.ly), for preview engraves with
+    /// LilyPond 2.24 or later. Nil if it's missing.
+    static var adjustSettings: URL? {
+        let url = root.appendingPathComponent("LilyPond/fmac-edit.ly")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        if let version = AppDelegate.shared.lilypondVersion, version < LilyPondVersion(2, 24, 0) { return nil }
+        return url
+    }
+
     /// python-ly and the driver script.
     static var pythonLyTool: PythonLyTool? {
         guard let python = PythonLyTool.findPython() else { return nil }

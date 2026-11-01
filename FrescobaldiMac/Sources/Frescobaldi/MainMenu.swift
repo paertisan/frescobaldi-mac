@@ -183,6 +183,7 @@ enum MainMenu {
         add(menu, "Zoom In", #selector(DocumentWindowController.zoomInPreview(_:)), "=")
         add(menu, "Zoom Out", #selector(DocumentWindowController.zoomOutPreview(_:)), "-")
         add(menu, "Fit Width", #selector(DocumentWindowController.zoomToFitPreview(_:)), "0")
+        add(menu, "Adjust Objects in Preview", #selector(DocumentWindowController.toggleAdjust(_:)), "a", [.command, .shift])
         menu.addItem(.separator())
         add(menu, "Show Toolbar", #selector(NSWindow.toggleToolbarShown(_:)), "t", [.command, .option])
         add(menu, "Customize Toolbar…", #selector(NSWindow.runToolbarCustomizationPalette(_:)))

@@ -23,6 +23,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { ClaudeBridge.shared.update() }
         }
+        #if DEBUG
+        if AdjustSelfTest.isRequested {
+            // In the background: don't take the user's focus.
+            AdjustSelfTest.runIfRequested()
+            return
+        }
+        #endif
         NSApp.activate()
     }
 
@@ -30,7 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ClaudeBridge.shared.stop()
     }
 
-    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        #if DEBUG
+        if AdjustSelfTest.isRequested { return false }
+        #endif
+        return true
+    }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 

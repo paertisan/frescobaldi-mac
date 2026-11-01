@@ -27,18 +27,24 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
     }
 
     let pdfView = ScoreView()
+    /// Outlines and drags objects while adjusting.
+    let adjustOverlay = AdjustOverlay()
     let controls = PreviewControlsModel()
     private var emptyState: NSHostingView<PreviewEmptyState>!
     private var linkIndex = PointAndClickIndex<LinkTarget>()
     private var highlights: [(page: PDFPage, annotation: PDFAnnotation)] = []
     private var observers: [NSObjectProtocol] = []
     private(set) var url: URL?
+    /// When the shown PDF was written.
+    private(set) var pdfDate: Date?
+    private var flagsMonitor: Any?
 
     /// Called when a textedit:// link in the score is clicked.
     var onTextEditLink: ((TextEditLink) -> Void)?
 
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
     }
 
     override func loadView() {
@@ -52,6 +58,10 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
             if let link = TextEditLink(url: url) { self?.onTextEditLink?(link) }
         }
         container.addSubview(pdfView)
+        adjustOverlay.translatesAutoresizingMaskIntoConstraints = false
+        adjustOverlay.pdfView = pdfView
+        pdfView.overlay = adjustOverlay
+        container.addSubview(adjustOverlay)
 
         emptyState = NSHostingView(rootView: PreviewEmptyState())
         emptyState.sizingOptions = []
@@ -67,6 +77,10 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
             pdfView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             pdfView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             pdfView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            adjustOverlay.leadingAnchor.constraint(equalTo: pdfView.leadingAnchor),
+            adjustOverlay.trailingAnchor.constraint(equalTo: pdfView.trailingAnchor),
+            adjustOverlay.topAnchor.constraint(equalTo: pdfView.topAnchor),
+            adjustOverlay.bottomAnchor.constraint(equalTo: pdfView.bottomAnchor),
             emptyState.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             emptyState.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             emptyState.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
@@ -85,9 +99,34 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
         let center = NotificationCenter.default
         for name in [Notification.Name.PDFViewPageChanged, .PDFViewScaleChanged, .PDFViewDocumentChanged] {
             observers.append(center.addObserver(forName: name, object: pdfView, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateControls() }
+                MainActor.assumeIsolated {
+                    self?.updateControls()
+                    self?.adjustOverlay.refreshHover()
+                }
             })
         }
+        // Scrolling moves the objects under the outline.
+        observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let clip = note.object as? NSClipView,
+                      clip.isDescendant(of: self.pdfView) else { return }
+                self.adjustOverlay.refreshHover()
+            }
+        })
+        // Holding ⌥ adjusts for one drag.
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.adjustOverlay.optionHeld = event.window === self.view.window
+                    && event.modifierFlags.intersection([.command, .option, .control]) == .option
+            }
+            return event
+        }
+        observers.append(center.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                if let self, note.object as? NSWindow === self.view.window { self.adjustOverlay.optionHeld = false }
+            }
+        })
         updateControls()
         applyTheme()
     }
@@ -117,6 +156,7 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
 
         clearHighlights()
         self.url = url
+        pdfDate = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
         pdfView.document = document
         buildLinkIndex(document)
         if autoScales {
@@ -136,33 +176,45 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
 
     func clear() {
         url = nil
+        pdfDate = nil
         pdfView.document = nil
         linkIndex = PointAndClickIndex()
+        adjustOverlay.items = [:]
         highlights = []
         updateControls()
     }
 
     private func buildLinkIndex(_ document: PDFDocument) {
         var index = PointAndClickIndex<LinkTarget>()
+        var objects: [Int: [AdjustItem]] = [:]
         for pageNumber in 0..<document.pageCount {
             guard let page = document.page(at: pageNumber) else { continue }
             for annotation in page.annotations {
                 let url = annotation.url ?? (annotation.action as? PDFActionURL)?.url
                 if let url, let link = TextEditLink(url: url) {
                     index.add(link, LinkTarget(page: pageNumber, bounds: annotation.bounds))
+                } else if let url, let link = GrobLink(url: url) {
+                    objects[pageNumber, default: []].append(AdjustItem(link: link, page: pageNumber, bounds: annotation.bounds))
                 }
             }
         }
         linkIndex = index
+        adjustOverlay.items = objects
     }
 
     var hasLinks: Bool { !linkIndex.isEmpty }
+    /// The PDF has objects that can be dragged (a preview engrave made it).
+    var hasAdjustLinks: Bool { adjustOverlay.hasItems }
 
     // MARK: Point and click
 
     func pdfViewWillClick(onLink sender: PDFView, with url: URL) {
         if let link = TextEditLink(url: url) {
             onTextEditLink?(link)
+        } else if let link = GrobLink(url: url) {
+            onTextEditLink?(TextEditLink(path: link.path, line: link.line, startColumn: link.column, endColumn: link.column))
+        } else if url.scheme == "fmac" {
+            return
         } else {
             NSWorkspace.shared.open(url)
         }
@@ -247,18 +299,25 @@ final class PreviewViewController: NSViewController, PDFViewDelegate {
 /// events to its internal subviews, so hitTest claims the points over links.
 final class ScoreView: PDFView {
     var onTextEditLink: ((URL) -> Void)?
+    /// While it outlines an object, the hand cursor is its own.
+    weak var overlay: AdjustOverlay?
     private var linkTracking: NSTrackingArea?
 
-    /// The textedit:// link under a point in this view's coordinates.
+    /// The textedit:// link under a point in this view's coordinates. An
+    /// object with only an adjust link (fmac://) gets a textedit link for
+    /// its event, so PDFKit never tries to open fmac:// itself.
     func textEditURL(at point: NSPoint) -> URL? {
         guard let page = page(for: point, nearest: false) else { return nil }
         let pagePoint = convert(point, to: page)
+        var adjustLink: GrobLink?
         for annotation in page.annotations.reversed() where annotation.bounds.contains(pagePoint) {
-            if let url = annotation.url ?? (annotation.action as? PDFActionURL)?.url, url.scheme == "textedit" {
-                return url
-            }
+            guard let url = annotation.url ?? (annotation.action as? PDFActionURL)?.url else { continue }
+            if url.scheme == "textedit" { return url }
+            if adjustLink == nil { adjustLink = GrobLink(url: url) }
         }
-        return nil
+        guard let link = adjustLink,
+              let path = link.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "textedit://\(path):\(link.line):\(link.column):\(link.column)")
     }
 
     private func textEditURL(for event: NSEvent) -> URL? {
@@ -296,7 +355,11 @@ final class ScoreView: PDFView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        if textEditURL(for: event) != nil { NSCursor.pointingHand.set() }
+        if overlay?.isOverObject == true {
+            NSCursor.openHand.set()
+        } else if textEditURL(for: event) != nil {
+            NSCursor.pointingHand.set()
+        }
     }
 }
 

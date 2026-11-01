@@ -27,6 +27,18 @@ final class EngraveModel: ObservableObject {
     @Published var progress: (done: Int, total: Int)?
     /// Running a build command instead of LilyPond.
     @Published var commandName: String?
+    /// A short message shown in place of the status for a few seconds
+    /// (adjusting objects in the preview).
+    @Published private(set) var notice: String?
+    private var noticeTimer: Timer?
+
+    func show(notice text: String, seconds: TimeInterval = 4) {
+        notice = text
+        noticeTimer?.invalidate()
+        noticeTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.notice = nil }
+        }
+    }
 
     /// Set by the window: jump to an issue.
     var onSelectMessage: ((LilyPondMessage) -> Void)?
@@ -55,44 +67,12 @@ struct EngraveStatusView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            switch model.status {
-            case .idle:
-                Text("⌘R to engrave")
-                    .foregroundStyle(.tertiary)
-            case let .running(mode):
-                ProgressView()
-                    .controlSize(.mini)
-                Group {
-                    if let command = model.commandName {
-                        Text("Running \(command)…")
-                    } else if let progress = model.progress {
-                        Text("Engraving \(progress.total) targets (\(progress.done) done)…")
-                    } else {
-                        Text(model.targetName.map { "Engraving \($0)…" }
-                             ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
-                    }
-                }
-                .foregroundStyle(.secondary)
-            case let .finished(succeeded, errors, warnings, duration):
-                let time = "\(duration.formatted(.number.precision(.fractionLength(1)))) s"
-                let what = model.progress.map { " \($0.total) targets" } ?? model.targetName.map { " \($0)" } ?? ""
-                Group {
-                    if let command = model.commandName {
-                        Text(succeeded && errors == 0 ? "Ran \(command) in \(time)" : "\(command) failed")
-                    } else {
-                        Text(succeeded && errors == 0 ? "Engraved\(what) in \(time)" : "Engraving\(what) failed")
-                    }
-                }
-                .foregroundStyle(succeeded && errors == 0 ? .secondary : .primary)
-                if errors > 0 { IssueCount(count: errors, error: true) }
-                if warnings > 0 { IssueCount(count: warnings, error: false) }
-            case .cancelled:
-                Text("Stopped")
+            if let notice = model.notice {
+                Text(notice)
                     .foregroundStyle(.secondary)
-            case let .failed(message):
-                Text(message)
-                    .lineLimit(1)
                     .truncationMode(.tail)
+            } else {
+                status
             }
         }
         .font(.callout)
@@ -104,6 +84,48 @@ struct EngraveStatusView: View {
             if !model.messages.isEmpty { model.selectedTab = .issues }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var status: some View {
+        switch model.status {
+        case .idle:
+            Text("⌘R to engrave")
+                .foregroundStyle(.tertiary)
+        case let .running(mode):
+            ProgressView()
+                .controlSize(.mini)
+            Group {
+                if let command = model.commandName {
+                    Text("Running \(command)…")
+                } else if let progress = model.progress {
+                    Text("Engraving \(progress.total) targets (\(progress.done) done)…")
+                } else {
+                    Text(model.targetName.map { "Engraving \($0)…" }
+                         ?? (mode == .publish ? "Engraving for publishing…" : "Engraving…"))
+                }
+            }
+            .foregroundStyle(.secondary)
+        case let .finished(succeeded, errors, warnings, duration):
+            let time = "\(duration.formatted(.number.precision(.fractionLength(1)))) s"
+            let what = model.progress.map { " \($0.total) targets" } ?? model.targetName.map { " \($0)" } ?? ""
+            Group {
+                if let command = model.commandName {
+                    Text(succeeded && errors == 0 ? "Ran \(command) in \(time)" : "\(command) failed")
+                } else {
+                    Text(succeeded && errors == 0 ? "Engraved\(what) in \(time)" : "Engraving\(what) failed")
+                }
+            }
+            .foregroundStyle(succeeded && errors == 0 ? .secondary : .primary)
+            if errors > 0 { IssueCount(count: errors, error: true) }
+            if warnings > 0 { IssueCount(count: warnings, error: false) }
+        case .cancelled:
+            Text("Stopped")
+                .foregroundStyle(.secondary)
+        case let .failed(message):
+            Text(message)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
     }
 }
 

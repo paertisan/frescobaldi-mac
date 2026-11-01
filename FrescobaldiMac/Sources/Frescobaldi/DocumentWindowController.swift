@@ -46,6 +46,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// engrave closes it again.
     private var logOpenedForErrors = false
     private var cancellables: Set<AnyCancellable> = []
+    /// The toolbar's Adjust toggle.
+    private weak var adjustItem: NSToolbarItemGroup?
 
     init(document: LilyPondDocument) {
         lilyDocument = document
@@ -154,6 +156,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             self?.editor.textView.showFindIndicator(for: item.range)
         }
         preview.onTextEditLink = { [weak self] link in self?.open(link) }
+        preview.adjustOverlay.onReveal = { [weak self] link in
+            self?.open(TextEditLink(path: link.path, line: link.line, startColumn: link.column, endColumn: link.column))
+        }
+        preview.adjustOverlay.onAdjust = { [weak self] item, tweak, done in
+            guard let self else { return done(false) }
+            self.adjust(item.link, with: tweak, completion: done)
+        }
+        preview.adjustOverlay.describe = { [weak self] link in self?.describe(link) ?? link.summary }
         editor.issuePath = { [weak self] in self?.lilyDocument.fileURL?.path ?? self?.untitledSource?.path }
         NotificationCenter.default.publisher(for: IssueMarkerStore.didEdit)
             .sink { [weak self] note in
@@ -221,12 +231,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         static let log = NSToolbarItem.Identifier("log")
         static let preview = NSToolbarItem.Identifier("preview")
         static let transpose = NSToolbarItem.Identifier("transpose")
+        static let adjust = NSToolbarItem.Identifier("adjust")
     }
 
     private func buildToolbar() {
-        // A new identifier, so saved layouts from before the Engrave button
-        // took over Stop reset.
-        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar3")
+        // A new identifier, so saved layouts reset and show the Adjust toggle.
+        let toolbar = NSToolbar(identifier: "LilyPondDocumentToolbar4")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true
@@ -237,7 +247,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, ToolbarID.engrave, ToolbarID.target, .flexibleSpace,
-         ToolbarID.status, .flexibleSpace, ToolbarID.midi, ToolbarID.log, ToolbarID.preview]
+         ToolbarID.status, .flexibleSpace, ToolbarID.midi, ToolbarID.adjust, ToolbarID.log, ToolbarID.preview]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -272,6 +282,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             return button("Preview", "sidebar.right", #selector(togglePreview(_:)), "Show or Hide Preview (⌥⌘↩)")
         case ToolbarID.transpose:
             return button("Transpose", "arrow.up.arrow.down", #selector(transposePitches(_:)), "Transpose (⌃⌘T)")
+        case ToolbarID.adjust:
+            // A toggle: selected while adjusting.
+            let image = NSImage(systemSymbolName: "arrow.up.and.down.and.arrow.left.and.right",
+                                accessibilityDescription: "Adjust") ?? NSImage()
+            let group = NSToolbarItemGroup(itemIdentifier: id, images: [image], selectionMode: .selectAny,
+                                           labels: ["Adjust"], target: self, action: #selector(adjustClicked(_:)))
+            group.label = "Adjust"
+            group.paletteLabel = "Adjust Objects"
+            group.toolTip = "Drag objects in the preview to adjust them (⇧⌘A). Or hold ⌥ and drag."
+            group.setSelected(preview.adjustOverlay.isOn, at: 0)
+            adjustItem = group
+            return group
         case ToolbarID.target:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Target"
@@ -340,6 +362,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             return !engraveModel.messages.isEmpty
         case #selector(zoomInPreview(_:)), #selector(zoomOutPreview(_:)), #selector(zoomToFitPreview(_:)):
             return preview.pdfView.document != nil
+        case #selector(toggleAdjust(_:)):
+            item.state = preview.adjustOverlay.isOn ? .on : .off
+            return true
         default:
             return true
         }
@@ -379,7 +404,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
                 untitledSource = source
                 try Data(lilyDocument.text.utf8).write(to: source)
-                start(EngraveRun(jobs: [EngraveJob(lilypond: lilypond, source: source, mode: mode)], names: [name]),
+                let job = EngraveJob(lilypond: lilypond, source: source, mode: mode,
+                                     previewSettings: AppResources.adjustSettings)
+                start(EngraveRun(jobs: [job], names: [name]),
                       mode: mode, completion: completion)
             } catch {
                 fail(error)
@@ -406,7 +433,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         let jobs = targets.map { target in
             let options = project.engraveOptions(for: target)
             return EngraveJob(lilypond: lilypond, source: target, outputBase: options.outputBase, mode: mode,
-                              extraArguments: options.arguments)
+                              extraArguments: options.arguments, previewSettings: AppResources.adjustSettings)
         }
         let names = targets.map { project.relativePath($0) }
         let current = project.target.map(LilyPondProject.normalized)
@@ -997,6 +1024,97 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// The toolbar's Engrave button, which stops a run in progress.
     @objc func engraveOrStop(_ sender: Any?) {
         if engraveModel.isRunning { stopEngraving(sender) } else { engravePreview(sender) }
+    }
+
+    // MARK: Adjusting objects
+
+    @objc func toggleAdjust(_ sender: Any?) { setAdjusting(!preview.adjustOverlay.isOn) }
+
+    @objc private func adjustClicked(_ sender: NSToolbarItemGroup) { setAdjusting(sender.isSelected(at: 0)) }
+
+    private func setAdjusting(_ on: Bool) {
+        preview.adjustOverlay.isOn = on
+        adjustItem?.setSelected(on, at: 0)
+        guard on else { return }
+        if previewItem.isCollapsed { previewItem.animator().isCollapsed = false }
+        engraveModel.show(notice: preview.hasAdjustLinks
+            ? "Drag to adjust · right-click for options"
+            : "Engrave (⌘R) to adjust objects in the preview")
+    }
+
+    /// "Dynamic · mf · line 12", with the file if it isn't this one.
+    private func describe(_ link: GrobLink) -> String {
+        isThisDocument(link.path) ? link.summary : link.summary + " · " + URL(fileURLWithPath: link.path).lastPathComponent
+    }
+
+    /// Writes a drag into the source as one undoable change, in this
+    /// document or the file the object is in (opened as a tab if needed),
+    /// then engraves again.
+    private func adjust(_ link: GrobLink, with tweak: Tweak, completion: @escaping (Bool) -> Void) {
+        guard !engraveModel.isRunning else {
+            engraveModel.show(notice: "Wait for the engrave to finish, then adjust")
+            return completion(false)
+        }
+        withController(for: link.path) { [weak self] controller in
+            guard let self, let controller else { return completion(false) }
+            guard self.previewIsCurrent(for: controller.lilyDocument, path: link.path) else {
+                self.engraveModel.show(notice: "The source changed since this preview · engrave (⌘R), then adjust")
+                NSSound.beep()
+                return completion(false)
+            }
+            let textView = controller.editor.textView
+            do {
+                let edit = try TweakWriter.edit(tweak, for: link, in: textView.nsString)
+                var selection = textView.selectedRange()
+                let delta = (edit.replacement as NSString).length - edit.range.length
+                if edit.range.location <= selection.location { selection.location += delta }
+                textView.replace(edit.range, with: edit.replacement, selection: selection,
+                                 actionName: "Adjust \(link.displayName)")
+            } catch {
+                self.engraveModel.show(notice: error.localizedDescription, seconds: 6)
+                NSSound.beep()
+                return completion(false)
+            }
+            completion(true)
+            // Next time round: NSDocument counts the change a moment later,
+            // and the engrave must see it to save the file first.
+            DispatchQueue.main.async { self.engrave(mode: .preview) }
+        }
+    }
+
+    /// The window controller of the open file at `path`: this one, another
+    /// open document, or the file opened as a tab of this window.
+    private func withController(for path: String, _ body: @escaping (DocumentWindowController?) -> Void) {
+        if isThisDocument(path) { return body(self) }
+        let target = LilyPondProject.normalized(URL(fileURLWithPath: path))
+        for case let document as LilyPondDocument in NSDocumentController.shared.documents {
+            if let url = document.fileURL, LilyPondProject.normalized(url) == target,
+               let controller = document.windowControllers.first as? DocumentWindowController {
+                return body(controller)
+            }
+        }
+        NSDocumentController.shared.openDocument(withContentsOf: URL(fileURLWithPath: path), display: true) { [weak self] document, _, error in
+            if let error { NSApp.presentError(error) }
+            guard let controller = (document as? LilyPondDocument)?.windowControllers.first as? DocumentWindowController
+            else { return body(nil) }
+            if let window = self?.window, let newWindow = controller.window, newWindow !== window,
+               !(window.tabbedWindows?.contains(newWindow) ?? false) {
+                window.addTabbedWindow(newWindow, ordered: .above)
+            }
+            // Keep the score in front: the edit shows up in that tab.
+            self?.window?.makeKeyAndOrderFront(nil)
+            body(controller)
+        }
+    }
+
+    /// Whether the preview was engraved from the text the document has
+    /// now, so the links' lines and columns still fit.
+    private func previewIsCurrent(for document: LilyPondDocument, path: String) -> Bool {
+        guard let pdfDate = preview.pdfDate else { return false }
+        let url = URL(fileURLWithPath: path)
+        guard let disk = try? String(contentsOf: url, encoding: .utf8), disk == document.text else { return false }
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        return modified.map { $0 <= pdfDate.addingTimeInterval(1) } ?? false
     }
 
     @objc func zoomInPreview(_ sender: Any?) { preview.zoomIn() }
