@@ -14,7 +14,7 @@ Expected setup: Apple silicon Mac, macOS 26 or later, Xcode at
 cd FrescobaldiMac
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 OPEN=1 scripts/build-app.sh             # also fetches python-ly into build/python
-PYTHON_LY_DIR=build/python swift test   # 127 core + 14 MCP tests, python-ly and LilyPond ones included
+PYTHON_LY_DIR=build/python swift test   # 148 core + 14 MCP tests, python-ly and LilyPond ones included
 ```
 
 The app compiled on the first try. None of the expected problems below
@@ -300,6 +300,43 @@ and on a score whose notes are in an `\include`d file.
       appearing, the context menu opening, the hand cursors, Shift to keep
       a drag straight, dragging near the edge (no autoscroll yet).
 - [ ] Adjust on a large score in the app: the self-test used small ones.
+
+## 2i. Piano tables
+
+Checked on 2026-11-01 with LilyPond 2.26.0, again through the debug
+self-test (`FMAC_SELFTEST_TABLE`, `FMAC_SELFTEST_WIZARD`) instead of the
+mouse and keyboard, in Ivory and Charcoal.
+
+- [x] Tests: `TableFormatter` (lining up, beam letters over their cells,
+      comments, tuplets, Tab order, add/delete column, template, include
+      line, locations outside the text); 12 engraves of tables with exact
+      MIDI and no warnings; the Piano (tables) project and a violin with
+      two pianos as tables engrave, score and parts.
+- [x] Insert Piano Table on an empty line of a piano score: the
+      `\include "piano-tables.ily"` line goes after `\version`, the file is
+      written beside the score, the first cell is selected, and the
+      project sidebar lists the include.
+- [x] Typing eight cells with Tab between them (the editor's own
+      insertText and insertTab): the columns and beam letters stay lined
+      up after each one; ⇧Tab from the first cell goes to the last beam
+      letter.
+- [x] Add Table Column after `e''` and typing `g''` in it; Delete Table
+      Column; the engrave after has no messages and shows the cross-staff
+      sixteenths.
+- [x] `\col` shows as a thin grey bar in both themes.
+- [x] New Score: "Piano (tables)" under Solo and Duo, "Type the piano as
+      tables" on under Note Entry, and the preview's first bar empty (the
+      table) with rests after it.
+- [x] Bug found and fixed: `TableFormatter.table(containing:)` overflowed
+      for `NSNotFound`.
+- [ ] Undo of the table commands: the self-test can't check it (without
+      events NSUndoManager keeps one group open); they use the same
+      one-step `replace` as Adjust and the Tools menu.
+- [ ] By hand: typing with the real keyboard (key repeat, deleting across
+      a `\col`), the menu shortcuts ⌃⌘] and ⌃⌘[, Create… in New Score up
+      to the save panel.
+- [x] Rows written as `\relative c'' { \col … }`, and a table inside an
+      outer `\relative` (engrave test).
 
 ## 3. Things to look at closely
 

@@ -9,7 +9,7 @@ implementation; this folder replaces its UI with Swift, AppKit and SwiftUI.
 (Swift 6.4) and was tested by hand on macOS 27 with LilyPond 2.26.0:
 editing, engraving, point-and-click both ways, issues, MIDI, the Tools
 menu, templates and Settings all work, in light and dark mode.
-`FrescobaldiCore` passes its 127 tests on macOS (the ones that engrave need
+`FrescobaldiCore` passes its 148 tests on macOS (the ones that engrave need
 LilyPond, the PDF ones PDFKit; the rest are meant to run on Linux too, last
 checked there at 76 tests with Swift 6.2), and the MCP server its 14 on
 macOS. Claude can work with scores through the bundled MCP server (see
@@ -305,6 +305,75 @@ code (`#(list …)`) isn't merged; the drag says so. Undo of a change in an
 included file is in that file's tab. No MCP tool for it yet: Claude can
 write the same tweaks with `edit_document`.
 
+## Piano tables
+
+Both staves of a piano passage can be typed together, as a table: a row
+for the upper staff and one for the lower, with `\col` between the
+columns, and above them where each column's beam goes. Notes from both
+rows that share a beam become one voice that changes staff, so cross-staff
+beams, arpeggios and split chords come out right, and the MIDI plays every
+note once. Spontini's `\easyCrossStaff` tables are the inspiration; this is
+our own implementation (`Resources/LilyPond/piano-tables.ily`, plain
+LilyPond and Scheme), written into the project so the score compiles
+anywhere.
+
+```lilypond
+\include "piano-tables.ily"
+
+pianoRight = {
+  \clef treble
+  \pianoTable
+    #'(    C          -      -        - )
+    { \col c''16[ \col s \col e'' \col s   \col }
+    { \col s16    \col g \col s   \col c'] \col }
+  r2
+}
+```
+
+- **Beam row** (optional, first): `U` above (stems up), `D` below, `C`
+  between the staves, `N` no cross-staff (each row its own voice in its
+  staff), `-` as before; without it LilyPond chooses. (LilyPond can't skip
+  an optional argument at the end of a music function, so the list comes
+  before the rows rather than after them as in Spontini.)
+- **Columns**: one stretch of time. Both cells have the same length, or one
+  is empty. A note in only one row goes to that row's staff; notes in both
+  are joined into one stem (`\crossStaff`, with `Span_stem_engraver` on the
+  PianoStaff). A beam or slur written on a skip (`s8]`) moves to the note
+  in the other row. A `\tuplet` may span columns (with `\col` inside it in
+  both rows) and keeps one bracket.
+- **`\pianoTablePoly 2 { {row} {row} {row} }`**: one row per voice, the
+  first two in the upper staff (`\voiceOne`, `\voiceTwo`, …), the rest in
+  the lower; columns there only line things up.
+- Pitches are absolute (c' is middle C), also inside `\relative`, which
+  continues after the table from the note before it. The staves are found
+  by name, "right" and "left" as New Score makes them
+  (`pianoTableStaves = #'("upper" . "lower")` for others).
+
+**In the editor.** Tools > Insert Piano Table puts an empty table (four
+eighth-note columns) at the insertion point with its first cell selected,
+and if needed writes `piano-tables.ily` beside the file and adds the
+`\include` after `\version`, as one undo step. As you type in a table, its
+columns stay lined up (`TableFormatter` in Core moves only spaces, and the
+caret stays in its cell). Tab and ⇧Tab select the next and previous cell,
+across rows; Add Table Column (⌃⌘]) and Delete Table Column (⌃⌘[) work on
+every row and the beam letter. `\col` is drawn as a thin grey bar.
+
+**New Score.** The "Piano (tables)" preset, or "Type the piano as tables"
+under Note Entry for any score with a piano: the project gets
+`piano-tables.ily` (included by the score and the piano part), and the
+piano's music starts with a one-bar table of beats in the right hand; the
+left hand's variable keeps its staff going. Several pianos get their own
+`pianoTableStaves`. The `new_score` MCP tool takes `piano_tables`.
+
+**Tests.** Engraves of every case with LilyPond (no errors or warnings,
+and the MIDI's notes and times exact): sixteenths crossing between the
+staves, beams above and below, split chords, `N` with rests, a triplet
+across the staves, a rising arpeggio and a lower-row chord, no beam list,
+`\relative` rows, polyphony, and the musical content of three Spontini examples (its
+cross-staff examples 1 and 2 and its polyphonic table, rewritten as our
+tables; in example 2's C - U D N pattern the kneed pair is E–G instead of
+two middle Cs, where a beam between the staves has no room).
+
 ## Design
 
 The window aims for the quiet, content-first look of apps like Claude's
@@ -426,7 +495,11 @@ FMAC_SELFTEST=/path/to/score.ly FMAC_SELFTEST_OUT=/tmp/adjust build/Frescobaldi.
 It opens the score, engraves, drags an articulation, a dynamic, a slur
 handle and a beam end with posted mouse events, undoes the last one, and
 writes window snapshots and `report.txt` (it edits the score: use a copy).
-`FMAC_SELFTEST_INCLUDE=1` drags an object from an included file instead.
+`FMAC_SELFTEST_INCLUDE=1` drags an object from an included file instead;
+`FMAC_SELFTEST_TABLE=1` inserts a piano table into the score (it needs an
+empty line before an `r2`) and types into it; `FMAC_SELFTEST_WIZARD=1`
+(with any `FMAC_SELFTEST` value) opens New Score with the Piano (tables)
+preset.
 
 The python-ly tests are skipped unless python-ly is found: they use
 `$PYTHON_LY_DIR` or `build/python`.
@@ -438,11 +511,11 @@ target is macOS-only in `Package.swift`.
 
 | Path | What |
 |---|---|
-| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`), `GrobLink` + `AdjustProperty` (preview objects), `TweakWriter` (+ `Tweak`) |
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`), `GrobLink` + `AdjustProperty` (preview objects), `TweakWriter` (+ `Tweak`), `TableFormatter` (piano tables in the source) |
 | `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge`, `ScoreWizard` (+ `ScoreWizardPreview`), `AdjustOverlay` (dragging in the preview), `AdjustSelfTest` (debug builds only) |
 | `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport`, `NewScore` (`new_score` arguments) |
 | `Sources/frescobaldi-mcp` | The helper's `main.swift` |
-| `Resources` | Templates, themes (`Themes/rainglow.json` + license), the python-ly driver and `LilyPond/fmac-edit.ly` (preview links), copied into the bundle |
+| `Resources` | Templates, themes (`Themes/rainglow.json` + license), the python-ly driver, `LilyPond/fmac-edit.ly` (preview links) and `LilyPond/piano-tables.ily` (piano tables), copied into the bundle |
 | `scripts/gen-lilypond-words.py` | Regenerates `LilyPondWords.swift` from a python-ly checkout |
 | `scripts/import-jetbrains-themes.py` | Converts JetBrains color schemes into a theme collection |
 
