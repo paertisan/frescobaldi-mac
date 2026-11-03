@@ -74,10 +74,7 @@ enum MainMenu {
         menu.addItem(templates)
         add(menu, "New Score…", #selector(AppDelegate.newScore(_:)), "n", [.command, .option], target: delegate)
         add(menu, "Open…", #selector(NSDocumentController.openDocument(_:)), "o")
-        let recent = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
-        delegate.openRecentMenu.delegate = delegate
-        recent.submenu = delegate.openRecentMenu
-        menu.addItem(recent)
+        // AppKit adds Open Recent after Open… itself.
         menu.addItem(.separator())
         add(menu, "Close", #selector(NSWindow.performClose(_:)), "w")
         add(menu, "Save…", #selector(NSDocument.save(_:)), "s")
