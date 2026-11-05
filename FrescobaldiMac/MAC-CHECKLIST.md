@@ -338,6 +338,34 @@ mouse and keyboard, in Ivory and Charcoal.
 - [x] Rows written as `\relative c'' { \col … }`, and a table inside an
       outer `\relative` (engrave test).
 
+## 2j. Export MIDI and MusicXML
+
+Checked on 2026-11-04 with LilyPond 2.26.0, in the app (Charcoal, and light
+mode with `-NSRequiresAquaSystemAppearance YES`) and in tests.
+
+- [x] File > Export MIDI… and Export MusicXML… sit under Export PDF…; the
+      save sheet offers `<score>.midi` / `<score>.musicxml` in the score's
+      folder; the status says "Exporting MusicXML…" and then "Exported
+      quartet.musicxml"; Engrave turns into Stop meanwhile.
+- [x] A New Score project (clarinet and piano): the MusicXML validates and
+      has the clarinet written in E major with `<transpose>`; the MIDI is
+      the score's own.
+- [x] A score without `\midi`: "Exported nomidi.midi, with a \midi block
+      added"; the file matches `\unfoldRepeats` + `\midi` typed by hand.
+- [x] A score with an error: "Couldn't export broken.ly" with LilyPond's
+      message, and no file written; no temporary folders are left.
+- [x] Tests: 27 exports (every New Score preset, a song with lyrics,
+      repeats, endings, tuplets, grace notes and a two-voice piano) validate
+      against the MusicXML 4.0 XSD; the MCP `export` tool writes MusicXML and
+      MIDI.
+- [x] A scratch copy of Mahler 9: 39 parts, 454 bars each, valid; 72 s.
+- [ ] Opening the files in MuseScore, Dorico, Sibelius or Finale: not
+      tried. Check how they read voices across staves, lyrics and endings.
+- [ ] Export MIDI on a score whose MIDI is up to date copies it without
+      engraving: covered by the code path, not watched in the app.
+- [ ] Untitled documents and projects with their own `-dinclude-settings`
+      (wrapped by a generated settings file; unit-tested only).
+
 ## 3. Things to look at closely
 
 - **Line-number ruler with `fullSizeContentView`.** It did draw over the

@@ -43,6 +43,7 @@ still open.
 | Issues/log | SwiftUI panel: Issues list (click to jump; opens included files if needed) plus raw log. It starts closed, opens when a run has errors, and closes again after a clean run if it opened by itself. Messages without a location (`warning: Unknown paper size`) are listed too and open the log; a message keeps the lines LilyPond prints after it, up to a blank line (the one that explains a Scheme error) |
 | Tools | `Resources/python/fmac_lytool.py` runs python-ly's API on the whole document with a cursor over the selection (as Frescobaldi does), so `\language`, `\version` and enclosing `\relative` are respected. The CLI only sees the piped text and loses that context. Run as `python3 -I -B fmac_lytool.py <python-ly dir>` with a JSON request on stdin. Commands: transpose, translate pitch names, rel2abs/abs2rel, simplify accidentals, indent, reformat. rel2abs/abs2rel refuse music with `\resetRelativeOctave`, whose pitch python-ly reads as a note (upstream #930). The result is applied as one minimal, undoable replacement. python-ly 0.9.10 (pure Python, needs ≥3.8) is bundled in `Contents/Resources/python` |
 | MIDI | `AVMIDIPlayer` with `/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls` |
+| Export MIDI, MusicXML | File menu and the `export` tool. LilyPond engraves the score again in a temp folder with `-dno-print-pages`. See [MIDI and MusicXML](#midi-and-musicxml) |
 | Settings | `NSTabViewController` (toolbar tab style) hosting SwiftUI forms. Includes the LilyPond path with auto-detect, version, and an **arm64 / Intel (Rosetta)** badge from the Mach-O header |
 | Templates | `Resources/Templates/*.ly`, ported from Frescobaldi's built-ins (`$LILYPOND_VERSION`, `$CURSOR` placeholders), and the Score Wizard (see [New Score](#new-score)) |
 | Sidebar | Outline, or the project: include tree, folder and suggestions (see [Projects](#projects)) |
@@ -74,6 +75,7 @@ restart Claude.
 | Tool | What it does |
 |---|---|
 | `engrave` | Runs LilyPond on a `.ly` file (an include file engraves its target, with the project's include paths and output folder) or on source text; returns errors and warnings (file, 1-based line and column, source context), PDFs and MIDI files |
+| `export` | MIDI or MusicXML for a `.ly` file (an include file exports its target), as File > Export MIDI… / Export MusicXML… do; returns the files written and LilyPond's issues |
 | `render_page` | A PDF page as PNG, so Claude sees the score. Takes a `.pdf`, a `.ly` (its up-to-date PDF) or an open document. Long blank stretches are shortened unless `trim` is false |
 | `transform` | The Tools menu via python-ly: transpose, translate pitch names, relative ↔ absolute, simplify accidentals, re-indent, reformat. On a file, text, or an open document (its selection, as one undo step) |
 | `outline` | `\version`, `\include`, variables, blocks and `%%` markers with line numbers |
@@ -305,6 +307,60 @@ code (`#(list …)`) isn't merged; the drag says so. Undo of a change in an
 included file is in that file's tab. No MCP tool for it yet: Claude can
 write the same tweaks with `edit_document`.
 
+## MIDI and MusicXML
+
+File > Export MIDI… and Export MusicXML… export the document's score (its
+target, as ⌘R engraves it; edited files of the project are saved first).
+LilyPond engraves it again in a temporary folder without printing pages,
+and the save sheet's file is written when it's done. Stop (⌘.) cancels.
+
+**MIDI** is what the score's `\midi` blocks write; a MIDI file from an
+engrave that's newer than every source file is copied without engraving.
+A score without a `\midi` block still exports: `Resources/LilyPond/fmac-midi.ly`
+gives each score a `\midi` block for that run, with its repeats played out
+(the same file as `\unfoldRepeats` and `\midi { }` typed by hand). The
+repeats have to be unfolded in `toplevel-music-functions`, before LilyPond
+works out the music's lengths; unfolding a finished score's music breaks
+them ("Moment is not increasing").
+
+**MusicXML** comes from LilyPond itself rather than from parsing the source.
+`Resources/LilyPond/fmac-export.ly` adds engravers to Score, Staff, Voice
+and Lyrics that write every event they hear (notes, rests, ties, slurs,
+dynamics, articulations, tuplets, grace notes, clefs, keys, bar numbers,
+repeats and endings, tempo, rehearsal marks, lyrics) to a file, one tab-
+separated record per line. `ScoreEvents` reads it and `MusicXMLWriter`
+writes MusicXML 4.0, so variables, includes, `\relative`, `\transpose`,
+`\repeat` and music functions come out exactly as they print. (python-ly's
+MusicXML export reads the source text: on a New Score project it doubles
+every bar because of the MIDI score, scrambles the piano's chords because of
+`\global` in parallel, and drops the transposition and the titles.)
+
+- Each staff is a part; the staves of a PianoStaff make one part. StaffGroup,
+  ChoirStaff and GrandStaff become part groups (bracket or brace).
+- Part names are the staff's `instrumentName`, else the first one it gets,
+  else its short name, else the MIDI instrument; the MIDI program comes from
+  LilyPond's own table.
+- Transposing instruments are written as printed, with `<transpose>` from
+  `\transposition` (a concert-pitch New Score project exports correctly).
+- Measures follow LilyPond's bar numbers and lengths, with a pickup as
+  measure 0. Notes across a bar line are split and tied; `R` gives a whole-
+  bar rest in each bar; a staff with nothing in a bar gets a hidden rest.
+- Voices are numbered by staff (1–4 on the first, 5–8 on the second); a voice
+  that changes staff keeps its number.
+- Not written: beams, stems and accidentals (the file says so with
+  `<supports>`, and the program reading it works them out), slurs' and
+  hairpins' shapes, tweaks, chord names, figured bass, drums, tablature,
+  `Dynamics` contexts, lyrics not set with `\lyricsto`.
+- Several `\score` blocks give one file each (`name.musicxml`,
+  `name-2.musicxml` …), several MIDI files keep LilyPond's suffixes.
+
+Every New Score preset, a song with lyrics, repeats and a piano part, and
+the Mahler 9 score export to files that validate against the MusicXML 4.0
+schema (`xmllint --schema musicxml.xsd`). On the Mahler score (39 staves,
+454 bars) the export takes as long as LilyPond without pages (72 s, against
+about 100 s for an engrave); reading its 85,000 events and writing 11 MB of
+MusicXML takes under a second.
+
 ## Piano tables
 
 Both staves of a piano passage can be typed together, as a table: a row
@@ -511,7 +567,7 @@ target is macOS-only in `Package.swift`.
 
 | Path | What |
 |---|---|
-| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`), `GrobLink` + `AdjustProperty` (preview objects), `TweakWriter` (+ `Tweak`), `TableFormatter` (piano tables in the source) |
+| `Sources/FrescobaldiCore` | UI-free logic: `LilyPondLexer` (+ generated `LilyPondWords`), `TextEditLink`, `LilyPondLogParser`, `LilyPondLocator`, `DocumentOutline`, `EngraveJob`, `PythonLyTool`, `LilyPondTemplate`, `PointAndClickIndex`, `TextEditing` (+ `TextSubstitution`), `LineIndex`, `IssueMarkers` (+ `LineEdit`), `LilyPondProject` (include tree, main file, folder, suggestions, `DocumentVariables`), `Instruments` (`Pitch`, `PitchLanguage`, `Instrument`), `ScoreSpec` (+ `Ensemble`, `KeySignature`, `TimeSignature`), `ProjectTemplate` (writes a project from a `ScoreSpec`), `GrobLink` + `AdjustProperty` (preview objects), `TweakWriter` (+ `Tweak`), `TableFormatter` (piano tables in the source), `ScoreExport` (Export MIDI and MusicXML), `ScoreEvents` (+ `Rational`) and `MusicXMLWriter` |
 | `Sources/Frescobaldi` | The app: `main.swift`, `AppDelegate`, `MainMenu`, `DocumentController`, `LilyPondDocument`, `DocumentWindowController` (layout, toolbar, engraving, tools, MIDI), `EditorViewController`/`LilyTextView`/`LineNumberRuler`/`SyntaxHighlighter`, `PreviewViewController`, `EngraveModel` (status, issues and log views), `OutlineSidebar`, `ProjectNavigator` (sidebar), `Theme` (themes, `ThemeStore`), `MIDIPlayer`, `SettingsWindowController`, `Preferences`, `ClaudeBridge`, `ScoreWizard` (+ `ScoreWizardPreview`), `AdjustOverlay` (dragging in the preview), `AdjustSelfTest` (debug builds only) |
 | `Sources/FrescobaldiMCP` | MCP server (`MCPServer`, `JSONValue`), the tools (`FrescobaldiTools`), the app bridge (`Bridge`: socket client and server), `PageRenderer`, shared `EngraveReport`, `NewScore` (`new_score` arguments) |
 | `Sources/frescobaldi-mcp` | The helper's `main.swift` |
