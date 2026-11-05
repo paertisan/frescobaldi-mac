@@ -19,6 +19,7 @@ public enum FrescobaldiTools {
         then render_page to look at the result.
         - Pitches for transpose are Dutch names with octave marks (c, cis, bes, d'), \
         whatever language the document uses.
+        - MIDI and MusicXML: export writes them for a .ly file, as File > Export MIDI… / Export MusicXML… do.
         - A new piece: new_score creates a project folder (score, parts, one music file \
         per player) like File > New Score…; then write the music into music/<player>.ily.
         """
@@ -46,6 +47,27 @@ public enum FrescobaldiTools {
                     ]),
                     annotations: MCPToolAnnotations(readOnly: false, idempotent: true),
                     run: { try await context.engrave($0) }),
+            MCPTool(name: "export", title: "Export MIDI or MusicXML",
+                    description: """
+                        Export a .ly file's score as MIDI or MusicXML, as File > Export MIDI… and Export \
+                        MusicXML… do. LilyPond engraves it again in a temporary folder (without pages), \
+                        so the result is the music as LilyPond reads it: variables, includes, \\relative, \
+                        \\transpose and music functions included. An include file exports its score. A score \
+                        without a \\midi block still gets a MIDI file (repeats played out). MusicXML has \
+                        one file per \\score, with transposing instruments written with their transposition; \
+                        accidentals and beams are left to the program that opens it. Returns the files \
+                        written and LilyPond's issues.
+                        """,
+                    inputSchema: schema([
+                        "path": string("Path of the .ly file to export, or of a file it includes."),
+                        "format": string("What to write.", oneOf: ScoreExport.Format.allCases.map(\.rawValue)),
+                        "output": string("""
+                            The file to write (default: next to the score, <name>.midi or <name>.musicxml). \
+                            More scores (or MIDI files) get -1, -2 … after the name.
+                            """),
+                    ], required: ["path", "format"]),
+                    annotations: MCPToolAnnotations(readOnly: false, idempotent: true),
+                    run: { try await context.export($0) }),
             MCPTool(name: "render_page", title: "Render Score Page",
                     description: """
                         Render a page of an engraved score as a PNG image, to check the notation visually. \
@@ -240,10 +262,10 @@ private struct Context: Sendable {
     let bridge: BridgeClient
 
     /// A path argument: `~` expanded, must exist.
-    func file(_ arguments: JSONValue, key: String = "path") throws -> URL? {
+    func file(_ arguments: JSONValue, key: String = "path", mustExist: Bool = true) throws -> URL? {
         guard let path = arguments[key]?.string, !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else { throw MCPToolError("No such file: \(url.path)") }
+        guard !mustExist || FileManager.default.fileExists(atPath: url.path) else { throw MCPToolError("No such file: \(url.path)") }
         return url
     }
 
@@ -312,6 +334,58 @@ private struct Context: Sendable {
         var report = EngraveReport.json(result).object ?? [:]
         report["source"] = .string(target.path)
         return .json(.object(report))
+    }
+
+    // MARK: export
+
+    func export(_ arguments: JSONValue) async throws -> MCPToolResult {
+        guard let source = try file(arguments) else { throw MCPToolError("Give `path`, a .ly file.") }
+        guard let name = arguments["format"]?.string, let format = ScoreExport.Format(rawValue: name) else {
+            throw MCPToolError("Give `format`: midi or musicxml.")
+        }
+        guard let lilypond = environment.lilypond() else {
+            throw MCPToolError("LilyPond wasn't found. Install it (brew install lilypond) or set its location in Frescobaldi's Settings.")
+        }
+        guard let resources = environment.resources?.appendingPathComponent("LilyPond"),
+              FileManager.default.fileExists(atPath: resources.appendingPathComponent("fmac-export.ly").path) else {
+            throw MCPToolError("Frescobaldi's LilyPond files (Resources/LilyPond) weren't found.")
+        }
+        let project = try await blocking { LilyPondProject.open(source) }
+        guard let target = project.target else {
+            throw MCPToolError("\(source.lastPathComponent) makes no output by itself (no \\score, music or \\markup at top level), and no .ly file in \(project.root.path) includes it.")
+        }
+        let destination = try file(arguments, key: "output", mustExist: false)
+            ?? target.deletingPathExtension().appendingPathExtension(format.fileExtension)
+        let export = ScoreExport(format: format, lilypond: lilypond, source: target,
+                                 arguments: project.engraveOptions(for: target).arguments, resources: resources)
+        defer { try? FileManager.default.removeItem(at: export.folder) }
+        let outcome: Result<ScoreExport.Output, ScoreExport.Failure> = await withCheckedContinuation { continuation in
+            export.start { continuation.resume(returning: $0) }
+        }
+        switch outcome {
+        case let .success(output):
+            let written = try ScoreExport.copy(output.files, baseName: export.baseName, to: destination)
+            var report = EngraveReport.json(output.result).object ?? [:]
+            report.removeValue(forKey: "pdfs")
+            report.removeValue(forKey: "midis")
+            report["source"] = .string(target.path)
+            report["files"] = JSONValue(written.map(\.path))
+            if output.addedMIDIBlock {
+                report["note"] = .string("The score has no \\midi block; one was added for the export, with repeats played out.")
+            }
+            return .json(.object(report))
+        case let .failure(.lilypond(result)):
+            var report = EngraveReport.json(result).object ?? [:]
+            report["source"] = .string(target.path)
+            report["note"] = .string("LilyPond failed, so nothing was exported. Fix the errors and export again.")
+            return .json(.object(report))
+        case .failure(.noMusic):
+            throw MCPToolError("\(target.lastPathComponent) has no music to export: no \\score or notes at top level.")
+        case .failure(.cancelled):
+            throw MCPToolError("The export was stopped.")
+        case let .failure(.couldNotStart(message)):
+            throw MCPToolError("Couldn't export: \(message)")
+        }
     }
 
     // MARK: render_page

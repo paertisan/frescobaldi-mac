@@ -241,6 +241,32 @@ private func text(_ result: JSONValue) -> String {
         #expect(unused["isError"] == true && text(unused).contains("makes no output by itself"))
     }
 
+    /// export runs the real LilyPond: MusicXML to a chosen file, MIDI next to the score.
+    @Test(.enabled(if: LilyPondLocator.locate(userSetting: nil) != nil, "LilyPond isn't installed"))
+    func export() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let score = dir.appendingPathComponent("tune.ly")
+        try Data("\\version \"2.24.0\"\n\\header { title = \"Tune\" }\n\\score { \\relative c'' { \\repeat volta 2 { c4 d e f } g1 } \\layout { } }\n".utf8)
+            .write(to: score)
+        let server = server(environment(lilypond: LilyPondLocator.locate(userSetting: nil)))
+        let output = dir.appendingPathComponent("out/Tune.musicxml")
+        try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let xml = try JSONValue.parse(text(try await call(server, "export", [
+            "path": .string(score.path), "format": "musicxml", "output": .string(output.path),
+        ])))
+        #expect(xml["status"] == "succeeded")
+        #expect(xml["files"] == [.string(output.path)])
+        let written = try String(contentsOf: output, encoding: .utf8)
+        #expect(written.contains("<work-title>Tune</work-title>") && written.contains("<repeat direction=\"backward\"/>"))
+
+        let midi = try JSONValue.parse(text(try await call(server, "export", ["path": .string(score.path), "format": "midi"])))
+        #expect(midi["files"] == [.string(dir.appendingPathComponent("tune.midi").path)])
+        #expect(midi["note"]?.string?.contains("no \\midi block") == true)
+        let bad = try await call(server, "export", ["path": .string(score.path), "format": "pdf"])
+        #expect(bad["isError"] == true)
+    }
+
     @Test func newScore() async throws {
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
