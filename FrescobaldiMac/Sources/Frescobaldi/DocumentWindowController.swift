@@ -33,6 +33,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     private var engravedByCommand = false
     /// Export PDF's engraving for publishing, while it runs.
     private var exportJob: EngraveJob?
+    /// Export MIDI or MusicXML in progress.
+    private var scoreExport: ScoreExport?
     /// The temporary copy an untitled document is engraved from.
     private var untitledSource: URL?
     private lazy var targetMenu = TargetMenuController(model: projectModel) { [weak self] in
@@ -348,6 +350,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             return midiPlayer.isPlaying || !engraveModel.midis.isEmpty
         case #selector(exportPDF(_:)), #selector(revealPDF(_:)):
             return !engraveModel.pdfs.isEmpty
+        case #selector(exportMIDI(_:)), #selector(exportMusicXML(_:)):
+            return scoreExport == nil
         case #selector(toggleLog(_:)):
             item.title = logItem.isCollapsed ? "Show Issues and Log" : "Hide Issues and Log"
             return true
@@ -382,6 +386,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     @objc func stopEngraving(_ sender: Any?) {
         run?.cancel()
         exportJob?.cancel()
+        scoreExport?.cancel()
     }
 
     typealias EngraveCompletion = (Result<EngraveJob.Result, Error>) -> Void
@@ -402,17 +407,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             guard let lilypond = requireLilyPond(completion) else { return }
             engraveModel.targetName = nil
             do {
-                try FileManager.default.createDirectory(at: untitledDirectory, withIntermediateDirectories: true)
-                let name = lilyDocument.displayName.replacingOccurrences(of: "/", with: "-")
-                let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
-                untitledSource = source
-                try Data(lilyDocument.text.utf8).write(to: source)
-                // Its piano tables' include, which a saved file has beside it.
-                if lilyDocument.text.contains(TableFormatter.includeFile), let include = AppResources.pianoTables {
-                    let copy = untitledDirectory.appendingPathComponent(TableFormatter.includeFile)
-                    try? FileManager.default.removeItem(at: copy)
-                    try FileManager.default.copyItem(at: include, to: copy)
-                }
+                let source = try writeUntitledCopy()
+                let name = source.deletingPathExtension().lastPathComponent
                 let job = EngraveJob(lilypond: lilypond, source: source, mode: mode,
                                      previewSettings: AppResources.adjustSettings)
                 start(EngraveRun(jobs: [job], names: [name]),
@@ -458,6 +454,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             }
             self.start(EngraveRun(jobs: jobs, names: names, preferred: preferred), mode: mode, completion: completion)
         }
+    }
+
+    /// An untitled document's text in a temporary file, to engrave.
+    private func writeUntitledCopy() throws -> URL {
+        try FileManager.default.createDirectory(at: untitledDirectory, withIntermediateDirectories: true)
+        let name = lilyDocument.displayName.replacingOccurrences(of: "/", with: "-")
+        let source = untitledDirectory.appendingPathComponent(name).appendingPathExtension("ly")
+        untitledSource = source
+        try Data(lilyDocument.text.utf8).write(to: source)
+        // Its piano tables' include, which a saved file has beside it.
+        if lilyDocument.text.contains(TableFormatter.includeFile), let include = AppResources.pianoTables {
+            let copy = untitledDirectory.appendingPathComponent(TableFormatter.includeFile)
+            try? FileManager.default.removeItem(at: copy)
+            try FileManager.default.copyItem(at: include, to: copy)
+        }
+        return source
     }
 
     private func requireLilyPond(_ completion: EngraveCompletion?) -> URL? {
@@ -1020,6 +1032,146 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                                        log: "Couldn't start LilyPond: \(error.localizedDescription)",
                                        messages: [], pdfs: [], midis: [], duration: 0))
         }
+    }
+
+    // MARK: MIDI and MusicXML
+
+    static let musicXMLType = UTType(filenameExtension: "musicxml", conformingTo: .xml) ?? .xml
+
+    @objc func exportMIDI(_ sender: Any?) { export(.midi) }
+    @objc func exportMusicXML(_ sender: Any?) { export(.musicXML) }
+
+    /// File > Export MIDI… and Export MusicXML…: the document's score (its
+    /// target, as ⌘R engraves), engraved again in a temporary folder. The
+    /// edited files of the project are saved first, as for engraving.
+    private func export(_ format: ScoreExport.Format) {
+        guard let window, scoreExport == nil else { return }
+        guard let lilypond = requireLilyPond(nil) else { return }
+        if format == .musicXML, let version = AppDelegate.shared.lilypondVersion, version < LilyPondVersion(2, 24, 0) {
+            let alert = NSAlert()
+            alert.messageText = "Export MusicXML needs LilyPond 2.24 or later"
+            alert.informativeText = "This Mac has LilyPond \(version). Install a newer one (brew upgrade lilypond) or choose it in Settings."
+            alert.beginSheetModal(for: window)
+            return
+        }
+        let source: URL
+        var arguments: [String] = []
+        var documents: [LilyPondDocument] = []
+        if lilyDocument.fileURL != nil, let project = projectModel.currentProject(for: lilyDocument) {
+            let current = project.target.map(LilyPondProject.normalized)
+            let targets = ProjectModel.targets(for: .automatic, in: project)
+            guard let target = targets.first(where: { LilyPondProject.normalized($0) == current }) ?? targets.first else {
+                let alert = NSAlert()
+                alert.messageText = "Nothing to export"
+                alert.informativeText = nothingToEngraveMessage(project)
+                alert.beginSheetModal(for: window)
+                return
+            }
+            source = target
+            arguments = project.engraveOptions(for: target).arguments
+            documents = editedProjectDocuments(in: project)
+        } else {
+            do {
+                source = try writeUntitledCopy()
+            } catch {
+                presentError(error)
+                return
+            }
+        }
+        let name: String = lilyDocument.fileURL == nil ? lilyDocument.displayName ?? "Untitled"
+            : source.deletingPathExtension().lastPathComponent
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [format == .midi ? .midi : Self.musicXMLType]
+        panel.nameFieldStringValue = name + "." + format.fileExtension
+        if lilyDocument.fileURL != nil { panel.directoryURL = source.deletingLastPathComponent() }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let destination = panel.url, let self else { return }
+            self.save(documents) { error in
+                if let error {
+                    self.presentError(error)
+                    return
+                }
+                self.runExport(format, lilypond: lilypond, source: source, arguments: arguments, to: destination)
+            }
+        }
+    }
+
+    /// The MIDI files of the last engrave of `source`, if they're newer
+    /// than every file it includes: no need to engrave again.
+    private func freshMIDIs(for source: URL) -> [URL]? {
+        guard !engravedByCommand, let engraved = engravedSource,
+              LilyPondProject.normalized(engraved) == LilyPondProject.normalized(source) else { return nil }
+        let midis = engraveModel.midis.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !midis.isEmpty else { return nil }
+        func modified(_ path: String) -> Date? {
+            (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        }
+        let sources = projectModel.project?.includedPaths(of: source) ?? [source.path]
+        let newest = (sources.union([source.path])).compactMap(modified).max() ?? .distantFuture
+        guard let oldest = midis.compactMap({ modified($0.path) }).min(), oldest >= newest else { return nil }
+        return midis
+    }
+
+    private func runExport(_ format: ScoreExport.Format, lilypond: URL, source: URL, arguments: [String],
+                           to destination: URL) {
+        let baseName = source.deletingPathExtension().lastPathComponent
+        if format == .midi, let midis = freshMIDIs(for: source) {
+            finishExport(midis, baseName: baseName, to: destination, addedMIDIBlock: false)
+            return
+        }
+        let export = ScoreExport(format: format, lilypond: lilypond, source: source, arguments: arguments,
+                                 resources: AppResources.root.appendingPathComponent("LilyPond"))
+        let previous = (engraveModel.status, engraveModel.targetName, engraveModel.progress, engraveModel.commandName)
+        engraveModel.status = .running(.publish)
+        engraveModel.exporting = format == .midi ? "MIDI" : "MusicXML"
+        engraveModel.targetName = nil
+        engraveModel.progress = nil
+        engraveModel.commandName = nil
+        scoreExport = export
+        func finished(_ outcome: Result<ScoreExport.Output, ScoreExport.Failure>) {
+            defer { try? FileManager.default.removeItem(at: export.folder) }
+            guard scoreExport === export else { return }
+            scoreExport = nil
+            engraveModel.exporting = nil
+            // Unless an engrave started meanwhile, show what was there before.
+            if run == nil, case .running(.publish) = engraveModel.status {
+                (engraveModel.status, engraveModel.targetName, engraveModel.progress, engraveModel.commandName) = previous
+            }
+            switch outcome {
+            case let .success(output):
+                finishExport(output.files, baseName: baseName, to: destination, addedMIDIBlock: output.addedMIDIBlock)
+            case .failure(.cancelled):
+                break
+            case let .failure(.lilypond(result)):
+                let error = result.messages.first { $0.severity.isError }?.message
+                    ?? result.log.split(separator: "\n").last.map(String.init) ?? "LilyPond failed."
+                exportAlert("Couldn't export \(source.lastPathComponent)", error + "\n\nEngrave it with ⌘R to see the issues.")
+            case .failure(.noMusic):
+                exportAlert("Nothing to export", "\(source.lastPathComponent) has no music: no \\score or notes at top level.")
+            case let .failure(.couldNotStart(message)):
+                exportAlert("Couldn't export \(source.lastPathComponent)", message)
+            }
+        }
+        export.start { outcome in DispatchQueue.main.async { finished(outcome) } }
+    }
+
+    private func finishExport(_ files: [URL], baseName: String, to destination: URL, addedMIDIBlock: Bool) {
+        do {
+            let written = try ScoreExport.copy(files, baseName: baseName, to: destination)
+            var notice = "Exported \(destination.lastPathComponent)"
+            if written.count > 1 { notice += " and \(written.count - 1) more" }
+            if addedMIDIBlock { notice += ", with a \\midi block added" }
+            engraveModel.show(notice: notice, seconds: 6)
+        } catch {
+            presentError(error)
+        }
+    }
+
+    private func exportAlert(_ message: String, _ information: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = information
+        if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
     @objc func revealPDF(_ sender: Any?) {

@@ -27,6 +27,8 @@ final class EngraveModel: ObservableObject {
     @Published var progress: (done: Int, total: Int)?
     /// Running a build command instead of LilyPond.
     @Published var commandName: String?
+    /// Exporting: "MIDI" or "MusicXML".
+    @Published var exporting: String?
     /// A short message shown in place of the status for a few seconds
     /// (adjusting objects in the preview).
     @Published private(set) var notice: String?
@@ -97,6 +99,8 @@ struct EngraveStatusView: View {
             Group {
                 if let command = model.commandName {
                     Text("Running \(command)…")
+                } else if let exporting = model.exporting {
+                    Text("Exporting \(exporting)…")
                 } else if let progress = model.progress {
                     Text("Engraving \(progress.total) targets (\(progress.done) done)…")
                 } else {

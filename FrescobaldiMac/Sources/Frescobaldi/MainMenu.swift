@@ -87,6 +87,8 @@ enum MainMenu {
         menu.addItem(submenu(revert))
         menu.addItem(.separator())
         add(menu, "Export PDF…", #selector(DocumentWindowController.exportPDF(_:)), "e", [.command, .shift])
+        add(menu, "Export MIDI…", #selector(DocumentWindowController.exportMIDI(_:)))
+        add(menu, "Export MusicXML…", #selector(DocumentWindowController.exportMusicXML(_:)))
         add(menu, "Show PDF in Finder", #selector(DocumentWindowController.revealPDF(_:)))
         menu.addItem(.separator())
         add(menu, "Page Setup…", #selector(NSDocument.runPageLayout(_:)), "p", [.command, .shift])
