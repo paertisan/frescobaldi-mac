@@ -217,6 +217,51 @@ struct MusicXMLExportTests {
         #expect(try count(doc, "//part[@id='P2']//staccato") == 1)
         #expect(try count(doc, "//part[@id='P2']//note[staff='2' and not(rest)]") == 3)
         #expect(try count(doc, "//part[@id='P2']//rest[@measure='yes']") >= 1)
+        // The triplet's beam, as LilyPond drew it.
+        #expect(try strings(doc, "//part[@id='P1']//beam[@number='1']") == ["begin", "continue", "end"])
+        // The page: A4 at staff size 20 (20 TeX points, 7.03 mm, for the
+        // staff's height), and the titles on it.
+        #expect(try strings(doc, "//defaults/scaling/millimeters") == ["7.0292"])
+        let width = try #require(Double(try strings(doc, "//defaults/page-layout/page-width").first ?? ""))
+        #expect(abs(width / 40 * 7.0292 - 210) < 0.1, "A4 is 210 mm wide")
+        #expect(try strings(doc, "//credit[credit-type='composer']/credit-words") == ["Anon"])
+        #expect(try strings(doc, "//credit[credit-type='title']/credit-words/@justify") == ["center"])
+    }
+
+    /// Paper size and margins, forced breaks, hidden meters and notes, and
+    /// sixteenth beams with hooks.
+    @Test func layoutAndHiddenThings() async throws {
+        let score = """
+            \\version "2.24.0"
+            #(set! paper-alist (cons '("17x11" . (cons (* 17 in) (* 11 in))) paper-alist))
+            \\paper { #(set-paper-size "17x11") top-margin = 18\\mm left-margin = 16\\mm }
+            #(set-global-staff-size 16)
+            \\layout { \\context { \\Staff \\omit TimeSignature } }
+            \\new Staff \\relative c'' {
+              \\time 3/4 c8. d16 e4 f | \\break
+              \\hideNotes g2. \\unHideNotes | \\pageBreak
+              a2. |
+            }
+
+            """
+        let (_, texts, _) = try await export(.musicXML, files: ["score.ly": score])
+        let doc = try xml(try #require(texts.first))
+        // Staff size 16: 16 TeX points (1/72.27 in) = 5.6234 mm.
+        #expect(try strings(doc, "//defaults/scaling/millimeters") == ["5.6234"])
+        func mm(_ path: String) throws -> Double {
+            (Double(try strings(doc, path).first ?? "") ?? 0) / 40 * 5.6234
+        }
+        #expect(abs(try mm("//page-width") - 17 * 25.4) < 0.1)
+        #expect(abs(try mm("//page-height") - 11 * 25.4) < 0.1)
+        #expect(abs(try mm("//page-margins/top-margin") - 18) < 0.1)
+        #expect(abs(try mm("//page-margins/left-margin") - 16) < 0.1)
+        #expect(try strings(doc, "//measure[@number='2']/print/@new-system") == ["yes"])
+        #expect(try strings(doc, "//measure[@number='3']/print/@new-page") == ["yes"])
+        #expect(try strings(doc, "//time/@print-object") == ["no"])
+        #expect(try count(doc, "//measure[@number='2']/note[@print-object='no']") == 1)
+        #expect(try count(doc, "//measure[@number='3']/note[@print-object='no']") == 0)
+        #expect(try strings(doc, "//measure[@number='1']/note[1]/beam") == ["begin"])
+        #expect(try strings(doc, "//measure[@number='1']/note[2]/beam") == ["end", "backward hook"])
     }
 
     /// A New Score project: the clarinet entered at concert pitch comes out

@@ -165,6 +165,20 @@ public struct ScoreEvents: Sendable {
         /// What a written c' sounds as (`\transposition`).
         public var transposition: Pitch?
         public var timeSignatureStyle: String
+        /// False after \omit TimeSignature (hidden meters).
+        public var timeSignatureVisible: Bool = true
+    }
+
+    /// The page, in staff spaces of the score's staff size.
+    public struct Paper: Sendable, Equatable {
+        public var width: Double
+        public var height: Double
+        public var top: Double
+        public var bottom: Double
+        public var left: Double
+        public var right: Double
+        /// Millimetres per staff space.
+        public var outputScale: Double
     }
 
     public struct Key: Sendable {
@@ -214,6 +228,8 @@ public struct ScoreEvents: Sendable {
         public var direction: Int?
         /// Part of the note before it (an articulation inside a chord).
         public var attached: Bool
+        /// A note or rest that isn't printed (\hideNotes, \omit Rest).
+        public var hidden: Bool = false
     }
 
     public struct Lyric: Sendable {
@@ -227,6 +243,11 @@ public struct ScoreEvents: Sendable {
     public struct Score: Sendable {
         public var index: Int
         public var header: [String: String] = [:]
+        public var paper: Paper?
+        /// The notes of each beam, as LilyPond drew it.
+        public var beams: [(voice: String, moments: [Moment])] = []
+        /// Forced line and page breaks (\break, \pageBreak).
+        public var breaks: [(moment: Moment, page: Bool)] = []
         public var contexts: [String: Context] = [:]
         public var staves: [Staff] = []
         public var properties: [String: [StaffProperties]] = [:]
@@ -282,8 +303,20 @@ public struct ScoreEvents: Sendable {
                 let props = StaffProperties(
                     moment: m, clefGlyph: string(3), clefPosition: int(4) ?? 0, clefTransposition: int(5) ?? 0,
                     instrumentName: string(6), shortInstrumentName: string(7), midiInstrument: string(8),
-                    midiProgram: int(9), transposition: Pitch(field(10)), timeSignatureStyle: string(11))
+                    midiProgram: int(9), transposition: Pitch(field(10)), timeSignatureStyle: string(11),
+                    timeSignatureVisible: field(12) != "")
                 current?.properties[string(1), default: []].append(props)
+            case "paper":
+                let values = (1...7).compactMap { Double(field($0)) }
+                if values.count == 7 {
+                    current?.paper = Paper(width: values[0], height: values[1], top: values[2], bottom: values[3],
+                                           left: values[4], right: values[5], outputScale: values[6])
+                }
+            case "beam":
+                let moments = f.dropFirst(2).compactMap { Moment($0) }
+                if moments.count > 1 { current?.beams.append((string(1), moments)) }
+            case "break":
+                if let m = moment(1) { current?.breaks.append((m, field(2) == "page")) }
             case "key":
                 guard let m = moment(2), let tonic = Pitch(field(3)) else { continue }
                 current?.keys.append(Key(staff: string(1), moment: m, tonic: tonic, fifths: int(4) ?? 0))
@@ -309,7 +342,7 @@ public struct ScoreEvents: Sendable {
                     voice: string(1), staff: string(2), moment: m, kind: string(4),
                     duration: Duration(field(5)), pitch: Pitch(field(6)), spanDirection: int(7),
                     articulation: optional(8), text: optional(9), digit: int(10), direction: int(11),
-                    attached: field(12) == "1"))
+                    attached: field(12) == "1", hidden: field(13) == "1"))
             case "lyric":
                 guard let m = moment(2) else { continue }
                 current?.lyrics.append(Lyric(lyrics: string(1), moment: m, kind: string(3), text: string(4),

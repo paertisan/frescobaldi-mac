@@ -7,8 +7,8 @@ import Foundation
 /// harp, the hands of an organ) make one part. StaffGroup, ChoirStaff and
 /// GrandStaff (two flutes, divisi strings) become part groups. Measures follow LilyPond's bar numbers
 /// and lengths; notes that cross a bar line are split and tied.
-/// Accidentals and beams are left to the program that reads the file
-/// (it's told so with `<supports>`).
+/// Beams are written as LilyPond draws them; accidentals and stems are
+/// left to the program that reads the file (it's told so with `<supports>`).
 public struct MusicXMLWriter: Sendable {
     public var software: String
     /// The encoding date, YYYY-MM-DD.
@@ -38,6 +38,10 @@ public struct MusicXMLWriter: Sendable {
 
 private extension String {
     var nonEmpty: String? { trimmingCharacters(in: .whitespaces).isEmpty ? nil : self }
+}
+
+private extension Array {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
 }
 
 // MARK: - XML text
@@ -130,6 +134,9 @@ private struct ScoreBuilder {
         var duration: ScoreEvents.Duration
         var notes: [Note] = []
         var events: [Event] = []
+        var hidden = false
+        /// <beam> values by level (1: eighths), when the chord is beamed.
+        var beams: [String] = []
         /// Events that end at this chord though they arrived later (tuplet ends).
         var endEvents: [Event] = []
         var lyrics: [(number: Int, syllabic: String, text: String, extend: Bool)] = []
@@ -249,7 +256,7 @@ private struct ScoreBuilder {
             let instrument = timeline.first?.midiInstrument ?? ""
             let fromMIDI = instrument.prefix(1).uppercased() + instrument.dropFirst()
             var short: String = shorts.first ?? ""
-            var name: String = names.first ?? shorts.first ?? fromMIDI
+            var name: String = names.first ?? shorts.first ?? fromMIDI.nonEmpty ?? staff.contextID
             if let merge, let context = score.contexts[merge] {
                 if !context.instrumentName.isEmpty { name = context.instrumentName }
                 if !context.shortInstrumentName.isEmpty { short = context.shortInstrumentName }
@@ -317,6 +324,7 @@ private struct ScoreBuilder {
                 : first.kind == "rest-event" ? .rest : .measureRest
             var chord = Chord(moment: group.moment, voice: group.voice, staff: first.staff, kind: kind,
                               duration: duration)
+            chord.hidden = rhythmic.allSatisfy(\.hidden)
             var tieAll = false
             for event in group.events {
                 if event.attached {
@@ -361,6 +369,7 @@ private struct ScoreBuilder {
             }
         }
         attachLyrics(&chords, byVoice: byVoice)
+        attachBeams(&chords, byVoice: byVoice)
         return (chords, loose)
     }
 
@@ -389,6 +398,37 @@ private struct ScoreBuilder {
                 events.append(event)
             }
             groups[g].events = events
+        }
+    }
+
+    /// MusicXML's beam values for each beamed chord: begin, continue and
+    /// end on every level its notes share, hooks where one note has more.
+    func attachBeams(_ chords: inout [Chord], byVoice: [String: [Int]]) {
+        var chordAt: [String: [Moment: Int]] = [:]
+        for (voice, indices) in byVoice {
+            for index in indices where chords[index].kind != .measureRest {
+                chordAt[voice, default: [:]][chords[index].moment] = index
+            }
+        }
+        for beam in score.beams {
+            let members = beam.moments.compactMap { chordAt[beam.voice]?[$0] }
+            guard members.count > 1 else { continue }
+            let levels = members.map { Swift.max(0, chords[$0].duration.log - 2) }
+            guard let top = levels.max(), top > 0 else { continue }
+            for level in 1...top {
+                for (i, index) in members.enumerated() where levels[i] >= level {
+                    let before = i > 0 && levels[i - 1] >= level
+                    let after = i + 1 < members.count && levels[i + 1] >= level
+                    let value: String
+                    switch (before, after) {
+                    case (false, true): value = "begin"
+                    case (true, true): value = "continue"
+                    case (true, false): value = "end"
+                    case (false, false): value = i + 1 < members.count ? "forward hook" : "backward hook"
+                    }
+                    if chords[index].beams.count == level - 1 { chords[index].beams.append(value) }
+                }
+            }
         }
     }
 
@@ -677,10 +717,65 @@ private struct Renderer {
         xml.leaf("software", writer.software)
         xml.leaf("encoding-date", writer.date)
         xml.empty("supports", ["element": "accidental", "type": "no"])
-        xml.empty("supports", ["element": "beam", "type": "no"])
         xml.empty("supports", ["element": "stem", "type": "no"])
         xml.close("encoding")
         xml.close("identification")
+        if let paper = score.paper, paper.width > 0, paper.height > 0, paper.outputScale > 0 {
+            // Tenths: 10 per staff space, 40 for the staff's height.
+            func tenths(_ spaces: Double) -> String { Self.number(spaces * 10) }
+            xml.open("defaults")
+            xml.open("scaling")
+            xml.leaf("millimeters", Self.number(paper.outputScale * 4))
+            xml.leaf("tenths", "40")
+            xml.close("scaling")
+            xml.open("page-layout")
+            xml.leaf("page-height", tenths(paper.height))
+            xml.leaf("page-width", tenths(paper.width))
+            xml.open("page-margins", ["type": "both"])
+            xml.leaf("left-margin", tenths(paper.left))
+            xml.leaf("right-margin", tenths(paper.right))
+            xml.leaf("top-margin", tenths(paper.top))
+            xml.leaf("bottom-margin", tenths(paper.bottom))
+            xml.close("page-margins")
+            xml.close("page-layout")
+            xml.close("defaults")
+        }
+        writeCredits(&xml)
+    }
+
+    /// The titles as text on the first page, which is where programs such as
+    /// Dorico read the composer and lyricist from. Placed as LilyPond's
+    /// default title block: title and subtitle centred, poet on the left,
+    /// composer and arranger on the right, copyright at the foot.
+    func writeCredits(_ xml: inout XMLText) {
+        let paper = score.paper.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
+        let top = paper.map { ($0.height - $0.top) * 10 } ?? 0
+        let left = paper.map { $0.left * 10 } ?? 0
+        let right = paper.map { ($0.width - $0.right) * 10 } ?? 0
+        let center = paper.map { $0.width * 5 } ?? 0
+        let title = builder.header["title"].flatMap { $0.isEmpty ? nil : $0 }
+        let subtitle = score.header["piece"].flatMap { $0.isEmpty ? nil : $0 } ?? headerValue("subtitle")
+        let credits: [(type: String, text: String?, x: Double, y: Double, justify: String, valign: String, size: String)] = [
+            ("title", title, center, top, "center", "top", "22"),
+            ("subtitle", subtitle, center, top - 80, "center", "top", "16"),
+            ("lyricist", headerValue("poet"), left, top - 150, "left", "top", "11"),
+            ("composer", headerValue("composer"), right, top - 150, "right", "top", "11"),
+            ("arranger", headerValue("arranger"), right, top - 190, "right", "top", "11"),
+            ("rights", headerValue("copyright"), center, paper.map { $0.bottom * 10 } ?? 0, "center", "bottom", "9"),
+        ]
+        for credit in credits {
+            guard let text = credit.text else { continue }
+            xml.open("credit", ["page": "1"])
+            xml.leaf("credit-type", credit.type)
+            if paper != nil {
+                xml.leaf("credit-words", text, ["default-x": Self.number(credit.x), "default-y": Self.number(credit.y),
+                                                "justify": credit.justify, "valign": credit.valign,
+                                                "font-size": credit.size])
+            } else {
+                xml.leaf("credit-words", text, ["justify": credit.justify, "valign": credit.valign])
+            }
+            xml.close("credit")
+        }
     }
 
     var writer: MusicXMLWriter { builder.writer }
@@ -785,10 +880,11 @@ private struct Renderer {
         xml.close("clef")
     }
 
-    func writeTime(_ xml: inout XMLText, _ time: (Int, Int), style: String) {
+    func writeTime(_ xml: inout XMLText, _ time: (Int, Int), style: String, visible: Bool = true) {
         var attrs: KeyValuePairs<String, String> = [:]
         if style == "C" && time == (4, 4) { attrs = ["symbol": "common"] }
         if style == "C" && time == (2, 2) { attrs = ["symbol": "cut"] }
+        if !visible { attrs = ["print-object": "no"] }
         xml.open("time", attrs)
         xml.leaf("beats", "\(time.0)")
         xml.leaf("beat-type", "\(time.1)")
@@ -844,7 +940,8 @@ private struct Renderer {
             writeKey(&xml, key, number: part.staves.count > 1 ? number : nil)
         }
         if let time = change.time {
-            writeTime(&xml, time, style: score.properties[part.staves[0]]?.first?.timeSignatureStyle ?? "")
+            let props = score.properties[part.staves[0]]?.first
+            writeTime(&xml, time, style: props?.timeSignatureStyle ?? "", visible: props?.timeSignatureVisible ?? true)
         }
         for (number, props) in change.clefs.sorted(by: { $0.key < $1.key }) {
             writeClef(&xml, props, number: part.staves.count > 1 ? number : nil)
@@ -863,7 +960,8 @@ private struct Renderer {
             for (index, key) in keys.enumerated() { writeKey(&xml, key, number: index + 1) }
         }
         if let time = measures.first?.time ?? (measures.first.map { _ in (4, 4) }) {
-            writeTime(&xml, time, style: score.properties[part.staves[0]]?.first?.timeSignatureStyle ?? "")
+            let props = score.properties[part.staves[0]]?.first
+            writeTime(&xml, time, style: props?.timeSignatureStyle ?? "", visible: props?.timeSignatureVisible ?? true)
         }
         if part.staves.count > 1 { xml.leaf("staves", "\(part.staves.count)") }
         for (index, staff) in part.staves.enumerated() {
@@ -891,6 +989,9 @@ private struct Renderer {
         var attrs: KeyValuePairs<String, String> = ["number": "\(measure.number)"]
         if measure.implicit { attrs = ["number": "\(measure.number)", "implicit": "yes"] }
         xml.open("measure", attrs)
+        if m > 0, let forced = score.breaks.filter({ measureStarting(at: $0.moment.main) == m }).nilIfEmpty {
+            xml.empty("print", forced.contains { $0.page } ? ["new-page": "yes"] : ["new-system": "yes"])
+        }
         writeLeftBarline(&xml, measure: m)
         let changes = changes(in: part, measure: m)
         if m == 0 { writeFirstAttributes(&xml, part: part) }
@@ -1098,7 +1199,10 @@ private struct Renderer {
     }
 
     static func number(_ value: Double) -> String {
-        value == value.rounded() ? "\(Int(value))" : String(format: "%.2f", value)
+        if value == value.rounded() { return "\(Int(value))" }
+        var text = String(format: "%.4f", value)
+        while text.hasSuffix("0") { text.removeLast() }
+        return text
     }
 
     // MARK: Notes
@@ -1199,7 +1303,7 @@ private struct Renderer {
             offset += length
             let count = chord.kind == .notes ? chord.notes.count : 1
             for n in 0..<count {
-                xml.open("note")
+                xml.open("note", chord.hidden ? ["print-object": "no"] : [:])
                 if chord.isGrace { xml.empty("grace") }
                 if n > 0 { xml.empty("chord") }
                 switch chord.kind {
@@ -1235,6 +1339,9 @@ private struct Renderer {
                     xml.close("time-modification")
                 }
                 if part.staves.count > 1 { xml.leaf("staff", "\(staffNumber(chord.staff, in: part))") }
+                if n == 0, piece.first && piece.last, values.count == 1 {
+                    for (level, value) in chord.beams.enumerated() { xml.leaf("beam", value, ["number": "\(level + 1)"]) }
+                }
                 var events = n == 0 ? chord.events + chord.endEvents : []
                 if chord.kind == .notes { events += chord.notes[n].events }
                 if n > 0 { events += chord.events.filter { $0.kind == "arpeggio-event" } }

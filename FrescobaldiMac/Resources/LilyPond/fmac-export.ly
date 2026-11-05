@@ -13,20 +13,25 @@
 %%   fmac-events 1
 %%   header    key value                    (the \header of the file)
 %%   score     id index
+%%   paper     width height top bottom left right output-scale
+%%             (lengths in staff spaces; output-scale is mm per staff space)
+%%   break     moment line|page                (\break, \pageBreak)
 %%   scoreheader index key value            (a score's own \header)
 %%   ctx       id name context-id parent instrumentName shortInstrumentName
 %%   staff     id name context-id parent
 %%   props     staff moment clefGlyph clefPosition clefTransposition
 %%             instrumentName shortInstrumentName midiInstrument
 %%             midiProgram instrumentTransposition timeSignatureStyle
+%%             timeSignatureVisible
 %%   key       staff moment tonic fifths
 %%   bar       moment barNumber measurePosition measureLength numerator/denominator
 %%   barline   moment glyph
 %%   tempo     moment text unit count
 %%   mark      moment label number
 %%   ev        voice staff moment class duration pitch span-direction
-%%             articulation-type text digit direction attached
+%%             articulation-type text digit direction attached hidden
 %%   lyric     lyrics moment class text voice
+%%   beam      voice moment ...                (the notes of a beam as drawn)
 %%   end       moment finalBarType
 %%
 %% Pitches are "octave,notename,alteration" (c' is 0,0,0); durations
@@ -144,6 +149,10 @@
        (set! fmac-score-count (1+ fmac-score-count))
        (set! index fmac-score-count)
        (fmac-out "score" ctx index)
+       (let ((def (ly:context-output-def ctx)))
+         (apply fmac-out "paper"
+                (map (lambda (key) (ly:output-def-lookup def key #f))
+                     '(paper-width paper-height top-margin bottom-margin left-margin right-margin output-scale))))
        (if (pair? fmac-pending-headers)
            (begin
              (fmac-header-records "scoreheader" (car fmac-pending-headers) index)
@@ -154,6 +163,12 @@
           (fmac-out "tempo" (fmac-now ctx) (ly:event-property event 'text "")
                     (ly:event-property event 'tempo-unit #f)
                     (if (pair? count) (car count) count))))
+       ((line-break-event engraver event)
+        (if (eq? (ly:event-property event 'break-permission #f) 'force)
+            (fmac-out "break" (fmac-now ctx) "line")))
+       ((page-break-event engraver event)
+        (if (eq? (ly:event-property event 'break-permission #f) 'force)
+            (fmac-out "break" (fmac-now ctx) "page")))
        ((mark-event engraver event)
         (fmac-out "mark" (fmac-now ctx) (ly:event-property event 'label #f)
                   (ly:context-property ctx 'rehearsalMark #f))))
@@ -175,6 +190,11 @@
        (fmac-out "end" (fmac-now ctx) (ly:context-property ctx 'finalBarType #f))
        (if fmac-port (force-output fmac-port))))))
 
+%% Whether a grob is shown: not \omit (stencil #f) or \hide (transparent).
+#(define (fmac-visible? ctx grob)
+   (let ((def (ly:context-grob-definition ctx grob)))
+     (and (ly:assoc-get 'stencil def #t) (not (ly:assoc-get 'transparent def #f)))))
+
 #(define (fmac-staff-engraver ctx)
    (let ((props '()))
      (make-engraver
@@ -195,15 +215,23 @@
                          (ly:context-property ctx 'shortInstrumentName #f)
                          instrument program
                          (ly:context-property ctx 'instrumentTransposition #f)
-                         (ly:assoc-get 'style (ly:context-grob-definition ctx 'TimeSignature) #f))))
+                         (ly:assoc-get 'style (ly:context-grob-definition ctx 'TimeSignature) #f)
+                         (fmac-visible? ctx 'TimeSignature))))
          (if (not (equal? now props))
              (begin (set! props now) (apply fmac-out "props" ctx (fmac-now ctx) now))))))))
 
 #(define fmac-ignored '(skip-event bar-check-event key-change-event time-signature-event
-                        reference-time-signature-event tempo-change-event mark-event))
+                        reference-time-signature-event tempo-change-event mark-event
+                        line-break-event page-break-event))
 
 #(define (fmac-event-record voice staff now event attached)
-   (let ((volta (ly:event-property event 'volta-numbers #f)))
+   (let* ((volta (ly:event-property event 'volta-numbers #f))
+          (class (car (ly:event-property event 'class '(unknown))))
+          (hidden (case class
+                    ((note-event) (not (fmac-visible? voice 'NoteHead)))
+                    ((rest-event) (not (fmac-visible? voice 'Rest)))
+                    ((multi-measure-rest-event) (not (fmac-visible? voice 'MultiMeasureRest)))
+                    (else #f))))
      (fmac-out "ev" voice staff now (car (ly:event-property event 'class '(unknown)))
                (ly:event-property event 'duration #f)
                (ly:event-property event 'pitch #f)
@@ -213,11 +241,28 @@
                    (ly:event-property event 'text #f))
                (or (ly:event-property event 'digit #f) (ly:event-property event 'repeat-count #f))
                (ly:event-property event 'direction #f)
-               attached)))
+               attached
+               hidden)))
 
 #(define (fmac-voice-engraver ctx)
-   (let ((events '()))
+   (let ((events '()) (stems (make-hash-table)) (beams '()))
      (make-engraver
+      ;; Beams as LilyPond draws them (automatic or typed): each stem's
+      ;; moment, written when the voice ends and every beam is complete.
+      (acknowledgers
+       ((stem-interface engraver grob source)
+        (hashq-set! stems grob (fmac-now ctx)))
+       ((beam-interface engraver grob source)
+        (if (not (memq grob beams)) (set! beams (cons grob beams)))))
+      ((finalize engraver)
+       (for-each
+        (lambda (beam)
+          (let* ((array (ly:grob-object beam 'stems))
+                 (moments (filter-map (lambda (stem) (hashq-ref stems stem))
+                                      (if (ly:grob-array? array) (ly:grob-array->list array) '()))))
+            (if (> (length moments) 1) (apply fmac-out "beam" ctx moments))))
+        (reverse beams))
+       (if fmac-port (force-output fmac-port)))
       (listeners
        ((music-event engraver event)
         (if (not (memq (car (ly:event-property event 'class '(unknown))) fmac-ignored))
