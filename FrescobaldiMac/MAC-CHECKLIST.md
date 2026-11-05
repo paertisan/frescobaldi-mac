@@ -359,8 +359,19 @@ mode with `-NSRequiresAquaSystemAppearance YES`) and in tests.
       against the MusicXML 4.0 XSD; the MCP `export` tool writes MusicXML and
       MIDI.
 - [x] A scratch copy of Mahler 9: 39 parts, 454 bars each, valid; 72 s.
-- [ ] Opening the files in MuseScore, Dorico, Sibelius or Finale: not
-      tried. Check how they read voices across staves, lyrics and endings.
+- [x] Dorico 6 (2026-11-04): an 11x17 sketch score (a scratch copy) opens on
+      11x17 landscape with its staff size and 36 system / 8 page breaks;
+      the song keeps its beams, lyrics, endings, tuplet, grace note and
+      hairpin; the duo has "Clarinet in B♭" (transposing) and a grand-staff
+      piano. Part names fall back to the staff's context name.
+- [ ] Dorico leaves the composer and lyricist empty although the file has
+      them as `<creator>` and `<credit>`; how Dorico's own MusicXML export
+      writes them wasn't checked (typing in Dorico from the background
+      doesn't stick).
+- [ ] Dorico's MIDI import of LilyPond's MIDI: the dialog maps the
+      "acoustic grand" tracks to acoustic guitar. A copy with General MIDI
+      track names was made but not tried (the dialog couldn't be closed
+      from the test tool). MuseScore, Sibelius, Finale: not tried.
 - [ ] Export MIDI on a score whose MIDI is up to date copies it without
       engraving: covered by the code path, not watched in the app.
 - [ ] Untitled documents and projects with their own `-dinclude-settings`

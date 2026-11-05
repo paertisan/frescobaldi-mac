@@ -338,8 +338,18 @@ every bar because of the MIDI score, scrambles the piano's chords because of
 - Each staff is a part; the staves of a PianoStaff make one part. StaffGroup,
   ChoirStaff and GrandStaff become part groups (bracket or brace).
 - Part names are the staff's `instrumentName`, else the first one it gets,
-  else its short name, else the MIDI instrument; the MIDI program comes from
-  LilyPond's own table.
+  else its short name, else the MIDI instrument, else the staff's context
+  name (`\new Staff = "upper"`); the MIDI program comes from LilyPond's
+  own table.
+- The page: paper size, margins and staff size from LilyPond's `\paper`
+  (`<defaults>`: 10 tenths per staff space, 40 for `output-scale` × 4 mm;
+  LilyPond's points are TeX points, 1/72.27 in). Forced `\break` and
+  `\pageBreak` become `<print new-system>` and `<print new-page>`. Titles are
+  written twice: in `<work>` and `<identification>`, and as `<credit>` texts on
+  the first page (title, subtitle, poet, composer, arranger, copyright).
+- Beams are the ones LilyPond draws (automatic or typed), with hooks for
+  shorter values; a hidden time signature (`\omit TimeSignature`) and hidden
+  notes or rests (`\hideNotes`) stay hidden.
 - Transposing instruments are written as printed, with `<transpose>` from
   `\transposition` (a concert-pitch New Score project exports correctly).
 - Measures follow LilyPond's bar numbers and lengths, with a pickup as
@@ -347,8 +357,8 @@ every bar because of the MIDI score, scrambles the piano's chords because of
   bar rest in each bar; a staff with nothing in a bar gets a hidden rest.
 - Voices are numbered by staff (1–4 on the first, 5–8 on the second); a voice
   that changes staff keeps its number.
-- Not written: beams, stems and accidentals (the file says so with
-  `<supports>`, and the program reading it works them out), slurs' and
+- Not written: stems and accidentals (the file says so with `<supports>`,
+  and the program reading it works them out), slurs' and
   hairpins' shapes, tweaks, chord names, figured bass, drums, tablature,
   `Dynamics` contexts, lyrics not set with `\lyricsto`.
 - Several `\score` blocks give one file each (`name.musicxml`,
@@ -360,6 +370,22 @@ schema (`xmllint --schema musicxml.xsd`). On the Mahler score (39 staves,
 454 bars) the export takes as long as LilyPond without pages (72 s, against
 about 100 s for an engrave); reading its 85,000 events and writing 11 MB of
 MusicXML takes under a second.
+
+**In Dorico 6** (checked with a sketch on 11x17 landscape paper at staff
+size 16, the clarinet-and-piano project and the test song): File > Open
+of the `.musicxml` keeps the page size and orientation, the staff size,
+system and page breaks (Preferences > MusicXML Import: import breaks is on
+by default), part names, transposing instruments (a B♭ clarinet comes in as
+"Clarinet in B♭"), the piano as one grand-staff instrument, lyrics, repeats
+and endings, tuplets, grace notes, slurs, ties, hairpins and tempo. Dorico
+uses the file's beams (its "import explicit beams" preference), so they have
+to be written. It draws its own brackets rather than the part groups, and it
+doesn't fill in the composer or lyricist from `<creator>` or `<credit>` (the
+title does come through). A LilyPond MIDI file opens with the MIDI Import
+Options dialog; Dorico guesses the instrument from the track's instrument
+name, and reads LilyPond's "acoustic grand" as an acoustic guitar although
+the program change says piano: choose the destination instrument in that
+dialog.
 
 ## Piano tables
 
