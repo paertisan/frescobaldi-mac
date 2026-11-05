@@ -49,6 +49,8 @@ public final class EngraveJob: @unchecked Sendable {
     public let shellCommand: String?
     /// LilyPond's working directory: the source's folder, or the command's.
     public let workingDirectory: URL
+    /// Variables added to LilyPond's environment (an export's event file).
+    public let extraEnvironment: [String: String]
 
     /// Delivers output and completion in order.
     private let queue = DispatchQueue(label: "EngraveJob")
@@ -64,13 +66,15 @@ public final class EngraveJob: @unchecked Sendable {
     private var started: Date?
 
     public init(lilypond: URL, source: URL, outputBase: URL? = nil, mode: Mode = .preview,
-                extraArguments: [String] = [], previewSettings: URL? = nil) {
+                extraArguments: [String] = [], previewSettings: URL? = nil,
+                extraEnvironment: [String: String] = [:]) {
         self.lilypond = lilypond
         self.source = source
         self.outputBase = outputBase ?? source.deletingPathExtension()
         self.mode = mode
         self.extraArguments = extraArguments
         self.previewSettings = previewSettings
+        self.extraEnvironment = extraEnvironment
         shellCommand = nil
         workingDirectory = source.deletingLastPathComponent()
     }
@@ -85,6 +89,7 @@ public final class EngraveJob: @unchecked Sendable {
         mode = .preview
         extraArguments = []
         previewSettings = nil
+        extraEnvironment = [:]
         shellCommand = command
         workingDirectory = directory
     }
@@ -127,7 +132,7 @@ public final class EngraveJob: @unchecked Sendable {
         let process = Process()
         process.executableURL = lilypond
         process.arguments = arguments
-        process.environment = Self.environment()
+        process.environment = Self.environment().merging(extraEnvironment) { $1 }
         process.currentDirectoryURL = workingDirectory
         let pipe = Pipe()
         process.standardOutput = pipe
